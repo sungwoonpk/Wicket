@@ -8,7 +8,9 @@ if (!adminToken) {
 
 const port = Number(process.env.PORT ?? 8080);
 const upstreamUrl = process.env.WICKET_UPSTREAM_URL ?? "http://localhost:4010";
+const dbPath = process.env.WICKET_DB ?? "wicket.db";
 
-createGateway({ upstreamUrl, adminToken }).listen(port, () => {
-  console.log(`wicket listening on http://localhost:${port}, upstream ${upstreamUrl}`);
+createGateway({ upstreamUrl, adminToken, dbPath }).listen(port, () => {
+  console.log(`wicket listening on http://localhost:${port}, upstream ${upstreamUrl}, database ${dbPath}`);
+  console.log(`dashboard: http://localhost:${port}/dashboard`);
 });
