@@ -1,0 +1,22 @@
+{
+  "name": "wicket",
+  "version": "0.1.0",
+  "description": "A policy-enforcing gateway for AI agents: identity, keys, audit and cost control in front of LLM calls.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "dev:mock": "tsx src/mock/main.ts",
+    "dev": "tsx src/gateway/main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
