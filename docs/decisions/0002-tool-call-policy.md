@@ -1,6 +1,6 @@
 # 0002. Tool calls are judged on the model's response, by ordered rules
 
-Status: accepted
+Status: accepted. The rule for malformed arguments is replaced by [0008](0008-fail-closed-policy.md).
 
 ## Context
 
@@ -19,8 +19,8 @@ agent acts on it.
   response, otherwise any `require_approval` holds the whole response.
 - A denied response is not returned. The error names the tool and the rule's reason, and does
   not echo the arguments.
-- Arguments that are not valid JSON never match a rule with conditions, so a malformed call
-  cannot slip past a condition by failing to parse. It falls through to later rules and the default.
+- Arguments that cannot be judged (broken JSON, missing or non-numeric values) fail **closed**: they meet deny and
+  approval rules and never an allow rule. See [0008](0008-fail-closed-policy.md).
 - Streamed responses are held back and replayed only when the request declares tools and the
   policy has tool rules. Other streams pass through chunk by chunk, so streaming stays fast
   where it cannot matter.

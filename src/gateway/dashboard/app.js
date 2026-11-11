@@ -1227,7 +1227,7 @@
         ),
         h("p", {
           class: "muted",
-          text: "Mask replaces sensitive text with a tag such as [REDACTED:EMAIL] before it leaves. Block refuses the request. Replies from the model are always masked.",
+          text: "Mask replaces sensitive text with a tag such as [REDACTED:EMAIL] before it leaves. Block refuses the request. Replies that are not streamed are masked too.",
         }),
         h(
           "div",
