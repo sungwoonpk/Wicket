@@ -161,7 +161,8 @@
       el("div", { class: "tile" }, el("div", { class: "label" }, label), el("div", { class: "value" }, value))));
   }
 
-  function renderApprovals(list) {
+  function renderApprovals(list, agents) {
+    const names = Object.fromEntries(agents.map((a) => [a.id, a.name]));
     $("approvals-count").textContent = list.length ? "(" + list.length + " waiting)" : "";
     const box = $("approvals");
     box.replaceChildren();
@@ -172,7 +173,7 @@
       const approve = el("button", { class: "approve", "data-id": a.id, "data-act": "approve" }, "Approve");
       const deny = el("button", { class: "deny", "data-id": a.id, "data-act": "deny" }, "Deny");
       box.append(el("div", { class: "approval" },
-        el("div", { class: "what" }, el("div", {}, el("code", {}, a.agentId), " wants to call"), el("div", { class: "args" }, calls + " (" + reason + ")")),
+        el("div", { class: "what" }, el("div", {}, el("code", {}, names[a.agentId] || a.agentId), " wants to call"), el("div", { class: "args" }, calls + " (" + reason + ")")),
         el("span", { class: "mono" }, time(a.at)), approve, deny));
     }
   }
@@ -221,7 +222,7 @@
         api("/admin/requests?limit=15"), api("/admin/audit?limit=12"), api("/admin/audit/verify"),
       ]);
       $("gate").hidden = true; $("app").hidden = false;
-      renderTiles(summary); renderApprovals(approvals.approvals); renderAgents(agents.agents);
+      renderTiles(summary); renderApprovals(approvals.approvals, agents.agents); renderAgents(agents.agents);
       renderRequests(requests.requests); renderAudit(audit.events, verify);
     } catch (err) {
       $("app").hidden = true; $("gate").hidden = false;
