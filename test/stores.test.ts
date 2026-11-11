@@ -554,3 +554,76 @@ describe("parsePriceTable", () => {
     }
   });
 });
+
+describe("caches never serve a stale answer", () => {
+  it("policy: every write is visible to the next read", () => {
+    const db = openDb();
+    new TeamStore(db).ensure("finance");
+    const store = new PolicyStore(db);
+    assert.equal(store.effective("finance").defaultToolAction, "allow");
+    assert.equal(store.effective("finance"), store.effective("finance"), "a repeat read is served from the cache");
+    store.set({ defaultToolAction: "deny" });
+    assert.equal(store.effective("finance").defaultToolAction, "deny", "organization change seen at once");
+    store.setTeam("finance", { defaultToolAction: "require_approval" });
+    assert.equal(
+      store.effective("finance").defaultToolAction,
+      "require_approval",
+      "team policy created after a read is seen",
+    );
+    store.setTeam("finance", { defaultToolAction: "allow" });
+    assert.equal(store.effective("finance").defaultToolAction, "allow", "team policy replaced");
+    store.deleteTeam("finance");
+    assert.equal(store.effective("finance").defaultToolAction, "deny", "removing it falls back to the organization");
+    assert.equal(store.getTeam("finance"), undefined);
+  });
+
+  it("upstreams: create, disable, enable and delete change routing at once", () => {
+    const s = new UpstreamStore(openDb());
+    assert.equal(s.resolve("claude-1", "http://fallback").name, "default");
+    const u = s.create({ name: "a", kind: "anthropic", baseUrl: "https://a.example", models: ["claude-*"] });
+    assert.equal(s.resolve("claude-1", "x").name, "a");
+    s.setEnabled(u.id, false);
+    assert.equal(s.resolve("claude-1", "x").name, "default");
+    s.setEnabled(u.id, true);
+    assert.equal(s.resolve("claude-1", "x").name, "a");
+    s.delete(u.id);
+    assert.equal(s.resolve("claude-1", "x").name, "default");
+    assert.deepEqual(s.list(), []);
+  });
+
+  it("spend: a recorded request moves the cached total, and months stay apart", () => {
+    const db = openDb();
+    const store = new RequestStore(db);
+    const base = {
+      agentId: "a",
+      model: "m",
+      stream: false,
+      status: 200,
+      latencyMs: 1,
+      promptTokens: 1,
+      completionTokens: 1,
+      outcome: "ok" as const,
+    };
+    const nov = new Date("2026-11-15T10:00:00Z");
+    const dec = new Date("2026-12-02T10:00:00Z");
+    store.add({ ...base, costUsd: 1 }, nov);
+    assert.equal(store.spendThisMonth("a", nov), 1, "first read sums what is in the table");
+    store.add({ ...base, costUsd: 2 }, nov);
+    assert.equal(store.spendThisMonth("a", nov), 3, "a later request updates the cached total");
+    store.add({ ...base, costUsd: 5 }, dec);
+    assert.equal(store.spendThisMonth("a", nov), 3, "another month does not leak in");
+    assert.equal(store.spendThisMonth("a", dec), 5);
+    // The cache agrees with the database.
+    const sql = (db.prepare("SELECT SUM(cost_usd) AS t FROM requests WHERE at < '2026-12-01'").get() as { t: number })
+      .t;
+    assert.equal(store.spendThisMonth("a", nov), sql);
+  });
+
+  it("prepared statements are reused without mixing up results", () => {
+    const db = openDb();
+    const a = db.prepare("SELECT ? AS v");
+    assert.equal(db.prepare("SELECT ? AS v"), a, "the same SQL gives back the same statement");
+    assert.equal((a.get(1) as { v: number }).v, 1);
+    assert.equal((db.prepare("SELECT ? AS v").get(2) as { v: number }).v, 2);
+  });
+});

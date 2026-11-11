@@ -70,6 +70,13 @@ export function monthStart(now = new Date()): string {
 const BLOCKING: Outcome[] = ["blocked_pii", "denied_tool", "budget_exceeded", "rate_limited", "model_denied"];
 
 export class RequestStore {
+  /**
+   * Spend per agent and month, kept in memory. Summing the whole month in SQL on every request gets slower as
+   * the table grows, so the sum is read once and then kept up to date as requests are recorded.
+   * This assumes one gateway process owns the database.
+   */
+  private spend = new Map<string, number>();
+
   constructor(private readonly db: DatabaseSync) {}
 
   add(record: NewRequestRecord, now = new Date()): void {
@@ -90,6 +97,14 @@ export class RequestStore {
         record.costUsd,
         record.outcome,
       );
+    // Keep the cached month total in step, if this agent's total for that month has been read already.
+    const key = this.spendKey(record.agentId, now);
+    const known = this.spend.get(key);
+    if (known !== undefined) this.spend.set(key, known + record.costUsd);
+  }
+
+  private spendKey(agentId: string, at: Date): string {
+    return `${agentId}|${monthStart(at)}`;
   }
 
   recent(
@@ -115,11 +130,19 @@ export class RequestStore {
       .map(fromRow);
   }
 
-  /** Spend of one agent since the start of the current UTC month. */
+  /** Spend of one agent in the UTC month that contains `now`. */
   spendThisMonth(agentId: string, now = new Date()): number {
+    const key = this.spendKey(agentId, now);
+    const cached = this.spend.get(key);
+    if (cached !== undefined) return cached;
+    const start = monthStart(now);
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
     const row = this.db
-      .prepare("SELECT COALESCE(SUM(cost_usd), 0) AS total FROM requests WHERE agent_id = ? AND at >= ?")
-      .get(agentId, monthStart(now)) as { total: number };
+      .prepare("SELECT COALESCE(SUM(cost_usd), 0) AS total FROM requests WHERE agent_id = ? AND at >= ? AND at < ?")
+      .get(agentId, start, end) as { total: number };
+    // Old months are never read again once the month turns, so the map is trimmed rather than left to grow.
+    if (this.spend.size > 10_000) this.spend.clear();
+    this.spend.set(key, row.total);
     return row.total;
   }
 

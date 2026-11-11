@@ -57,12 +57,26 @@ export function parsePolicy(input: unknown): Policy {
 }
 
 export class PolicyStore {
+  /**
+   * Parsed policies by scope. A policy is read on every request, so it is parsed once and kept until a
+   * policy changes. Policies are only changed through this class, so clearing on any write is enough.
+   * This assumes one gateway process owns the database.
+   */
+  private cache = new Map<string, Policy | null>();
+
   constructor(private readonly db: DatabaseSync) {}
+
+  private cached(key: string, load: () => Policy | null): Policy | null {
+    if (!this.cache.has(key)) this.cache.set(key, load());
+    return this.cache.get(key) ?? null;
+  }
 
   /** The organization-wide policy, used by every team that has none of its own. */
   get(): Policy {
-    const row = this.db.prepare("SELECT doc FROM policy WHERE id = 1").get() as { doc: string } | undefined;
-    return row ? parsePolicy(JSON.parse(row.doc)) : DEFAULT_POLICY;
+    return this.cached("org", () => {
+      const row = this.db.prepare("SELECT doc FROM policy WHERE id = 1").get() as { doc: string } | undefined;
+      return row ? parsePolicy(JSON.parse(row.doc)) : DEFAULT_POLICY;
+    })!;
   }
 
   set(input: unknown): Policy {
@@ -70,14 +84,19 @@ export class PolicyStore {
     this.db
       .prepare("INSERT INTO policy (id, doc) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET doc = excluded.doc")
       .run(JSON.stringify(policy));
+    this.cache.clear();
     return policy;
   }
 
   /** A team's own policy, or undefined when the team follows the organization policy. */
   getTeam(team: string): Policy | undefined {
-    const row = this.db.prepare("SELECT doc FROM team_policies WHERE team = ?").get(team) as
-      { doc: string } | undefined;
-    return row ? parsePolicy(JSON.parse(row.doc)) : undefined;
+    return (
+      this.cached(`team:${team}`, () => {
+        const row = this.db.prepare("SELECT doc FROM team_policies WHERE team = ?").get(team) as
+          { doc: string } | undefined;
+        return row ? parsePolicy(JSON.parse(row.doc)) : null;
+      }) ?? undefined
+    );
   }
 
   setTeam(team: string, input: unknown): Policy {
@@ -85,11 +104,14 @@ export class PolicyStore {
     this.db
       .prepare("INSERT INTO team_policies (team, doc) VALUES (?, ?) ON CONFLICT(team) DO UPDATE SET doc = excluded.doc")
       .run(team, JSON.stringify(policy));
+    this.cache.clear();
     return policy;
   }
 
   deleteTeam(team: string): boolean {
-    return this.db.prepare("DELETE FROM team_policies WHERE team = ?").run(team).changes === 1;
+    const removed = this.db.prepare("DELETE FROM team_policies WHERE team = ?").run(team).changes === 1;
+    this.cache.clear();
+    return removed;
   }
 
   /** The policy that applies to a team: its own if it has one, otherwise the organization policy. */

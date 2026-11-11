@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 const MIGRATIONS: string[] = [
   `
@@ -104,7 +104,9 @@ const MIGRATIONS: string[] = [
 /** Opens the database and applies any migrations that have not run yet. */
 export function openDb(path = ":memory:"): DatabaseSync {
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+  // NORMAL is safe with WAL: a power cut can lose the last few commits but cannot corrupt the file.
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;");
+  reusePreparedStatements(db);
   const current = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
   for (let version = current; version < MIGRATIONS.length; version++) {
     db.exec("BEGIN");
@@ -118,4 +120,22 @@ export function openDb(path = ":memory:"): DatabaseSync {
     }
   }
   return db;
+}
+
+/**
+ * Compiling a statement costs more than running it, and the same few statements run on every request.
+ * This keeps each one after its first use. Statements are safe to reuse because the database is
+ * driven synchronously, so two never run at once.
+ */
+function reusePreparedStatements(db: DatabaseSync): void {
+  const cache = new Map<string, StatementSync>();
+  const prepare = db.prepare.bind(db);
+  (db as { prepare: (sql: string) => StatementSync }).prepare = (sql: string) => {
+    let statement = cache.get(sql);
+    if (!statement) {
+      statement = prepare(sql);
+      cache.set(sql, statement);
+    }
+    return statement;
+  };
 }

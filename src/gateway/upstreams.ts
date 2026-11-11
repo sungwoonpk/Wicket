@@ -76,7 +76,19 @@ function fromRow(row: any): Upstream {
 
 /** Routes a model name to the first enabled upstream whose patterns match it. */
 export class UpstreamStore {
+  /** The list with each model pattern already compiled. Rebuilt after any change, since routing runs on every request. */
+  private compiled: { upstream: Upstream; matchers: RegExp[] }[] | null = null;
+
   constructor(private readonly db: DatabaseSync) {}
+
+  private load(): { upstream: Upstream; matchers: RegExp[] }[] {
+    this.compiled ??= this.db
+      .prepare("SELECT * FROM upstreams ORDER BY id")
+      .all()
+      .map(fromRow)
+      .map((upstream) => ({ upstream, matchers: upstream.models.map((pattern) => globToRegExp(pattern)) }));
+    return this.compiled;
+  }
 
   create(input: NewUpstream): Upstream {
     const result = this.db
@@ -91,6 +103,7 @@ export class UpstreamStore {
         JSON.stringify(input.models),
         new Date().toISOString(),
       );
+    this.compiled = null;
     return this.get(Number(result.lastInsertRowid))!;
   }
 
@@ -100,22 +113,25 @@ export class UpstreamStore {
   }
 
   list(): Upstream[] {
-    return this.db.prepare("SELECT * FROM upstreams ORDER BY id").all().map(fromRow);
+    return this.load().map((entry) => entry.upstream);
   }
 
   setEnabled(id: number, enabled: boolean): Upstream | undefined {
     this.db.prepare("UPDATE upstreams SET enabled = ? WHERE id = ?").run(enabled ? 1 : 0, id);
+    this.compiled = null;
     return this.get(id);
   }
 
   delete(id: number): boolean {
-    return this.db.prepare("DELETE FROM upstreams WHERE id = ?").run(id).changes === 1;
+    const removed = this.db.prepare("DELETE FROM upstreams WHERE id = ?").run(id).changes === 1;
+    this.compiled = null;
+    return removed;
   }
 
   /** The upstream for a model, or the fallback when none matches. */
   resolve(model: string, fallbackUrl: string): Target {
-    for (const u of this.list()) {
-      if (u.enabled && u.models.some((pattern) => globToRegExp(pattern).test(model))) {
+    for (const { upstream: u, matchers } of this.load()) {
+      if (u.enabled && matchers.some((matcher) => matcher.test(model))) {
         return { name: u.name, kind: u.kind, baseUrl: u.baseUrl, apiKeyEnv: u.apiKeyEnv };
       }
     }
