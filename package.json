@@ -12,7 +12,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "dev:mock": "tsx src/mock/main.ts",
-    "dev": "tsx src/gateway/main.ts"
+    "dev": "tsx src/gateway/main.ts",
+    "demo": "tsx scripts/demo.ts",
+    "bench": "tsx scripts/bench.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
