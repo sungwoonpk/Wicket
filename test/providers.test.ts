@@ -21,7 +21,8 @@ describe("routing to an Anthropic upstream", () => {
   });
   after(() => h.close());
 
-  const claude = (content: string, extra: Record<string, unknown> = {}) => h.chat(key, content, { model: "claude-test", ...extra });
+  const claude = (content: string, extra: Record<string, unknown> = {}) =>
+    h.chat(key, content, { model: "claude-test", ...extra });
 
   it("sends a matching model to the Anthropic API and answers in OpenAI format", async () => {
     const res = await claude("hello");
@@ -52,7 +53,11 @@ describe("routing to an Anthropic upstream", () => {
       messages: [
         { role: "system", content: "Be brief." },
         { role: "user", content: "refund it" },
-        { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "refund", arguments: '{"amount":5}' } }] },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "c1", type: "function", function: { name: "refund", arguments: '{"amount":5}' } }],
+        },
         { role: "tool", tool_call_id: "c1", content: "done" },
         { role: "user", content: "thanks" },
       ],
@@ -66,7 +71,10 @@ describe("routing to an Anthropic upstream", () => {
     const res = await claude("stream this please", { stream: true });
     assert.equal(res.headers.get("content-type"), "text/event-stream");
     const text = await res.text();
-    const chunks = text.split("\n\n").filter((e) => e.startsWith("data: {")).map((e) => JSON.parse(e.slice(6)));
+    const chunks = text
+      .split("\n\n")
+      .filter((e) => e.startsWith("data: {"))
+      .map((e) => JSON.parse(e.slice(6)));
     assert.equal(chunks.map((c) => c.choices[0].delta.content ?? "").join(""), "mock reply to: stream this please");
     assert.ok(chunks.at(-1).usage.completion_tokens > 0);
     assert.ok(text.endsWith("data: [DONE]\n\n"));
@@ -99,12 +107,17 @@ describe("routing to an Anthropic upstream", () => {
     const released = await fetch(`${h.base}/v1/approvals/${id}`, { headers: { authorization: `Bearer ${key}` } });
     assert.equal(released.status, 200);
     const text = await released.text();
-    assert.ok(text.includes('"name":"refund"') && text.endsWith("data: [DONE]\n\n"), "released as translated OpenAI chunks");
+    assert.ok(
+      text.includes('"name":"refund"') && text.endsWith("data: [DONE]\n\n"),
+      "released as translated OpenAI chunks",
+    );
     await h.admin("/admin/policy", "PUT", {});
   });
 
   it("refuses image content that the adapter cannot translate", async () => {
-    const res = await claude("x", { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://x/y.png" } }] }] });
+    const res = await claude("x", {
+      messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://x/y.png" } }] }],
+    });
     assert.equal(res.status, 400);
     assert.match(((await res.json()) as any).error.message, /only text content/);
   });
@@ -112,13 +125,23 @@ describe("routing to an Anthropic upstream", () => {
   it("converts an Anthropic error into the OpenAI error shape and keeps the status", async () => {
     const res = await claude("[[status:529]]");
     assert.equal(res.status, 529);
-    assert.deepEqual(await res.json(), { error: { message: "mock error 529", type: "mock_error" } }, "no Anthropic envelope is left");
+    assert.deepEqual(
+      await res.json(),
+      { error: { message: "mock error 529", type: "mock_error" } },
+      "no Anthropic envelope is left",
+    );
   });
 
   it("passes a provider authentication failure through without leaking the key", async () => {
     const wrong = await harness({ gateway: { env: { ANTHROPIC_API_KEY: "the-wrong-key" } } });
     try {
-      await wrong.admin("/admin/upstreams", "POST", { name: "a", kind: "anthropic", baseUrl: wrong.mockUrl, apiKeyEnv: "ANTHROPIC_API_KEY", models: ["claude-*"] });
+      await wrong.admin("/admin/upstreams", "POST", {
+        name: "a",
+        kind: "anthropic",
+        baseUrl: wrong.mockUrl,
+        apiKeyEnv: "ANTHROPIC_API_KEY",
+        models: ["claude-*"],
+      });
       const agent = await wrong.newAgent();
       const res = await wrong.chat(agent, "hi", { model: "claude-test" });
       assert.equal(res.status, 401);
@@ -138,7 +161,12 @@ describe("routing to an Anthropic upstream", () => {
   });
 
   it("matches model patterns without regard to case and uses the first match", async () => {
-    await h.admin("/admin/upstreams", "POST", { name: "second", kind: "openai", baseUrl: h.mockUrl, models: ["CLAUDE-*"] });
+    await h.admin("/admin/upstreams", "POST", {
+      name: "second",
+      kind: "openai",
+      baseUrl: h.mockUrl,
+      models: ["CLAUDE-*"],
+    });
     assert.equal(((await (await claude("hello")).json()) as any).id, "msg_mock", "the earlier upstream wins");
   });
 });

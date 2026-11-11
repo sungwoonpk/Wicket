@@ -11,7 +11,10 @@ function fail(message: string): never {
 
 const adminToken = process.env.WICKET_ADMIN_TOKEN;
 if (!adminToken) fail("WICKET_ADMIN_TOKEN is required. Generate one with: openssl rand -hex 24");
-if (adminToken.length < MIN_TOKEN_LENGTH) fail(`WICKET_ADMIN_TOKEN is too short. Use at least ${MIN_TOKEN_LENGTH} characters, for example: openssl rand -hex 24`);
+if (adminToken.length < MIN_TOKEN_LENGTH)
+  fail(
+    `WICKET_ADMIN_TOKEN is too short. Use at least ${MIN_TOKEN_LENGTH} characters, for example: openssl rand -hex 24`,
+  );
 
 const port = Number(process.env.PORT ?? 8080);
 if (!Number.isInteger(port) || port < 0 || port > 65535) fail("PORT must be a number from 0 to 65535");
@@ -32,11 +35,23 @@ if (process.env.WICKET_PRICES_FILE) {
 }
 
 const quiet = process.env.WICKET_LOG === "off";
-const logger = quiet ? undefined : (record: Record<string, unknown>) => console.log(JSON.stringify({ time: new Date().toISOString(), ...record }));
+const logger = quiet
+  ? undefined
+  : (record: Record<string, unknown>) => console.log(JSON.stringify({ time: new Date().toISOString(), ...record }));
 
-const app = createGatewayApp({ upstreamUrl, adminToken, dbPath, prices, auditKey: process.env.WICKET_AUDIT_KEY, upstreamTimeoutMs: timeout, logger });
+const app = createGatewayApp({
+  upstreamUrl,
+  adminToken,
+  dbPath,
+  prices,
+  auditKey: process.env.WICKET_AUDIT_KEY,
+  upstreamTimeoutMs: timeout,
+  logger,
+});
 if (!process.env.WICKET_AUDIT_KEY) {
-  console.warn("wicket: WICKET_AUDIT_KEY is not set, so the audit head is signed with a key derived from the admin token. Set a separate key in production.");
+  console.warn(
+    "wicket: WICKET_AUDIT_KEY is not set, so the audit head is signed with a key derived from the admin token. Set a separate key in production.",
+  );
 }
 
 app.server.listen(port, host, () => {

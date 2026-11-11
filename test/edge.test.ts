@@ -23,7 +23,11 @@ describe("request validation", () => {
   after(() => h.close());
 
   const post = (body: string, headers: Record<string, string> = {}) =>
-    fetch(`${h.base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json", ...headers }, body });
+    fetch(`${h.base}/v1/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json", ...headers },
+      body,
+    });
   const errorOf = async (res: Response) => ((await res.json()) as any).error;
 
   it("refuses bodies that are not JSON objects", async () => {
@@ -59,7 +63,9 @@ describe("request validation", () => {
   });
 
   it("gives every response a request id and keeps a safe one from the caller", async () => {
-    const mine = await post(JSON.stringify({ model: "m", messages: [{ role: "user", content: "hi" }] }), { "x-request-id": "trace-123" });
+    const mine = await post(JSON.stringify({ model: "m", messages: [{ role: "user", content: "hi" }] }), {
+      "x-request-id": "trace-123",
+    });
     assert.equal(mine.headers.get("x-request-id"), "trace-123");
     const unsafe = await post("{}", { "x-request-id": "bad id\twith spaces" });
     assert.match(unsafe.headers.get("x-request-id")!, /^[0-9a-f-]{36}$/, "an unsafe id is replaced");
@@ -84,7 +90,11 @@ describe("request validation", () => {
   });
 
   it("never echoes a key, token or provider secret in an error", async () => {
-    const res = await fetch(`${h.base}/v1/chat/completions`, { method: "POST", headers: { authorization: "Bearer wk_secretvalue123", "content-type": "application/json" }, body: "{}" });
+    const res = await fetch(`${h.base}/v1/chat/completions`, {
+      method: "POST",
+      headers: { authorization: "Bearer wk_secretvalue123", "content-type": "application/json" },
+      body: "{}",
+    });
     assert.equal(res.status, 401);
     assert.ok(!(await res.text()).includes("secretvalue123"));
   });
@@ -223,7 +233,12 @@ describe("policy bypass attempts", () => {
       defaultToolAction: "allow",
       tools: [
         { tool: "delete_*", action: "deny", reason: "destructive" },
-        { tool: "refund", action: "require_approval", when: [{ arg: "amount", op: "gt", value: 100 }], reason: "large refund" },
+        {
+          tool: "refund",
+          action: "require_approval",
+          when: [{ arg: "amount", op: "gt", value: 100 }],
+          reason: "large refund",
+        },
         { tool: "fetch", action: "deny", when: [{ arg: "url", op: "matches", value: "^(a+)+$" }], reason: "bad url" },
       ],
     });
@@ -308,21 +323,39 @@ describe("policy simulator and charts", () => {
   let h: Harness;
   before(async () => {
     h = await harness();
-    await h.admin("/admin/policy", "PUT", { tools: [{ tool: "refund", action: "require_approval", when: [{ arg: "amount", op: "gt", value: 100 }] }] });
+    await h.admin("/admin/policy", "PUT", {
+      tools: [{ tool: "refund", action: "require_approval", when: [{ arg: "amount", op: "gt", value: 100 }] }],
+    });
   });
   after(() => h.close());
 
   it("judges a tool call against the saved policy without running it", async () => {
     const r = await h.admin("/admin/policy/simulate", "POST", { toolCall: { name: "refund", args: { amount: 500 } } });
     assert.equal(r.json.tool.action, "require_approval");
-    assert.equal((await h.admin("/admin/policy/simulate", "POST", { toolCall: { name: "refund", args: '{"amount":5}' } })).json.tool.action, "allow");
-    assert.equal((await h.admin("/admin/policy/simulate", "POST", { toolCall: { name: "refund", args: "{bad" } })).json.tool.argumentsValid, false);
+    assert.equal(
+      (await h.admin("/admin/policy/simulate", "POST", { toolCall: { name: "refund", args: '{"amount":5}' } })).json
+        .tool.action,
+      "allow",
+    );
+    assert.equal(
+      (await h.admin("/admin/policy/simulate", "POST", { toolCall: { name: "refund", args: "{bad" } })).json.tool
+        .argumentsValid,
+      false,
+    );
   });
 
   it("judges against an unsaved draft policy", async () => {
     const draft = { tools: [{ tool: "refund", action: "deny" }] };
-    assert.equal((await h.admin("/admin/policy/simulate", "POST", { policy: draft, toolCall: { name: "refund", args: {} } })).json.tool.action, "deny");
-    assert.equal((await h.admin("/admin/policy")).json.policy.tools[0].action, "require_approval", "the saved policy is untouched");
+    assert.equal(
+      (await h.admin("/admin/policy/simulate", "POST", { policy: draft, toolCall: { name: "refund", args: {} } })).json
+        .tool.action,
+      "deny",
+    );
+    assert.equal(
+      (await h.admin("/admin/policy")).json.policy.tools[0].action,
+      "require_approval",
+      "the saved policy is untouched",
+    );
   });
 
   it("previews redaction and says whether a request would be blocked", async () => {
@@ -330,11 +363,18 @@ describe("policy simulator and charts", () => {
     const r = await h.admin("/admin/policy/simulate", "POST", { policy: draft, text: "write to ann@example.com" });
     assert.equal(r.json.redaction.text, "write to [REDACTED:EMAIL]");
     assert.equal(r.json.redaction.wouldBlock, true);
-    assert.equal((await h.admin("/admin/policy/simulate", "POST", { text: "ann@example.com" })).json.redaction.wouldBlock, false, "the saved policy has redaction off");
+    assert.equal(
+      (await h.admin("/admin/policy/simulate", "POST", { text: "ann@example.com" })).json.redaction.wouldBlock,
+      false,
+      "the saved policy has redaction off",
+    );
   });
 
   it("rejects bad simulator input", async () => {
-    assert.equal((await h.admin("/admin/policy/simulate", "POST", { policy: { defaultToolAction: "maybe" } })).status, 400);
+    assert.equal(
+      (await h.admin("/admin/policy/simulate", "POST", { policy: { defaultToolAction: "maybe" } })).status,
+      400,
+    );
     assert.equal((await h.admin("/admin/policy/simulate", "POST", { toolCall: { args: {} } })).status, 400);
     assert.equal((await h.admin("/admin/policy/simulate", "POST", { text: "x".repeat(20_001) })).status, 400);
   });
@@ -357,7 +397,10 @@ describe("policy simulator and charts", () => {
     await h.chat(key, "x", { model: "demo-small", stream: "nope" });
     const mine = (await h.admin(`/admin/requests?agent=${id}`)).json.requests;
     assert.ok(mine.length >= 1 && mine.every((r: any) => r.agentId === id));
-    assert.equal((await h.admin("/admin/requests?outcome=ok")).json.requests.every((r: any) => r.outcome === "ok"), true);
+    assert.equal(
+      (await h.admin("/admin/requests?outcome=ok")).json.requests.every((r: any) => r.outcome === "ok"),
+      true,
+    );
     assert.equal((await h.admin("/admin/requests?outcome=bad%20value")).status, 400);
   });
 });
@@ -401,7 +444,14 @@ describe("upstream configuration", () => {
   });
   after(() => h.close());
 
-  const create = (body: Record<string, unknown>) => h.admin("/admin/upstreams", "POST", { name: "u", kind: "anthropic", baseUrl: "https://api.example.com", models: ["claude-*"], ...body });
+  const create = (body: Record<string, unknown>) =>
+    h.admin("/admin/upstreams", "POST", {
+      name: "u",
+      kind: "anthropic",
+      baseUrl: "https://api.example.com",
+      models: ["claude-*"],
+      ...body,
+    });
 
   it("refuses unsafe or malformed upstream definitions", async () => {
     assert.equal((await create({ baseUrl: "http://169.254.169.254/latest" })).status, 400, "cloud metadata address");
@@ -420,11 +470,20 @@ describe("upstream configuration", () => {
     const r = await create({ name: "ollama", kind: "openai", baseUrl: "http://localhost:11434/", models: ["llama*"] });
     assert.equal(r.status, 201);
     assert.equal(r.json.upstream.baseUrl, "http://localhost:11434", "trailing slash removed");
-    assert.equal((await create({ name: "ollama", kind: "openai", baseUrl: "http://localhost:11434", models: ["x"] })).status, 409);
+    assert.equal(
+      (await create({ name: "ollama", kind: "openai", baseUrl: "http://localhost:11434", models: ["x"] })).status,
+      409,
+    );
   });
 
   it("answers with a generic error when the provider key is not set, and says why in the audit trail", async () => {
-    await create({ name: "no-key", kind: "anthropic", baseUrl: h.mockUrl, apiKeyEnv: "SOME_UNSET_KEY", models: ["needs-key-*"] });
+    await create({
+      name: "no-key",
+      kind: "anthropic",
+      baseUrl: h.mockUrl,
+      apiKeyEnv: "SOME_UNSET_KEY",
+      models: ["needs-key-*"],
+    });
     const agent = await h.newAgent();
     const res = await h.chat(agent, "hi", { model: "needs-key-1" });
     assert.equal(res.status, 502);

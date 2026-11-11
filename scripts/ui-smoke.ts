@@ -18,7 +18,14 @@ const run = promisify(execFile);
 const ADMIN = "ui-smoke-admin-token";
 
 function findChrome(): string {
-  const candidates = [process.env.CHROME_BIN, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
+  const candidates = [
+    process.env.CHROME_BIN,
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ];
   const found = candidates.find((c) => c && existsSync(c));
   if (!found) {
     console.error("No Chrome or Chromium found. Set CHROME_BIN to its path.");
@@ -27,7 +34,10 @@ function findChrome(): string {
   return found;
 }
 
-const listen = (server: Server) => new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)));
+const listen = (server: Server) =>
+  new Promise<number>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)),
+  );
 
 const mock = createMockUpstream();
 const mockPort = await listen(mock);
@@ -37,7 +47,11 @@ const base = `http://127.0.0.1:${port}`;
 const chrome = findChrome();
 
 async function api(path: string, method = "GET", body?: unknown): Promise<any> {
-  const res = await fetch(base + path, { method, headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const res = await fetch(base + path, {
+    method,
+    headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
   return res.json();
 }
 
@@ -47,16 +61,36 @@ await api("/admin/teams", "POST", { id: "finance" });
 await api("/admin/policy", "PUT", { tools: [{ tool: "refund", action: "require_approval" }] });
 const support = (await api("/admin/agents", "POST", { name: "support-bot", team: "support", monthlyBudgetUsd: 5 })).key;
 const finance = (await api("/admin/agents", "POST", { name: "billing-agent", team: "finance" })).key;
-const hostile = (await api("/admin/agents", "POST", { name: "<img src=x onerror=document.documentElement.setAttribute('data-pwned','1')>", team: "support" })).key;
+const hostile = (
+  await api("/admin/agents", "POST", {
+    name: "<img src=x onerror=document.documentElement.setAttribute('data-pwned','1')>",
+    team: "support",
+  })
+).key;
 const call = (key: string, content: string) =>
-  fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify({ model: "demo-small", messages: [{ role: "user", content }] }) });
+  fetch(`${base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: JSON.stringify({ model: "demo-small", messages: [{ role: "user", content }] }),
+  });
 await call(support, "hello");
 await call(finance, '[[tool:refund {"amount":500}]]');
 await call(hostile, "hello");
 const viewer = (await api("/admin/users", "POST", { name: "Vee", role: "viewer", team: "support" })).key;
 
 async function dom(hash: string): Promise<string> {
-  const { stdout } = await run(chrome, ["--headless=new", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=9000", "--dump-dom", `${base}/dashboard#${hash}`], { maxBuffer: 20_000_000, timeout: 60_000 });
+  const { stdout } = await run(
+    chrome,
+    [
+      "--headless=new",
+      "--disable-gpu",
+      "--no-sandbox",
+      "--virtual-time-budget=9000",
+      "--dump-dom",
+      `${base}/dashboard#${hash}`,
+    ],
+    { maxBuffer: 20_000_000, timeout: 60_000 },
+  );
   return stdout;
 }
 
@@ -86,7 +120,11 @@ try {
   for (const [route, expected] of pages) {
     const html = await dom(`/${route}&token=${ADMIN}`);
     const missing = expected.filter((text) => !html.includes(text));
-    check(`${route} page draws`, missing.length === 0 && noErrors(html), `missing: ${missing.join(", ")}${noErrors(html) ? "" : ", and the page raised a script error"}`);
+    check(
+      `${route} page draws`,
+      missing.length === 0 && noErrors(html),
+      `missing: ${missing.join(", ")}${noErrors(html) ? "" : ", and the page raised a script error"}`,
+    );
   }
 
   const dark = await dom(`/overview&token=${ADMIN}&theme=dark`);
@@ -95,13 +133,26 @@ try {
   const hostileHtml = await dom(`/agents&token=${ADMIN}`);
   // The name itself contains "data-pwned", so look for the attribute on <html>, which only appears if the handler ran.
   const ran = /<html[^>]*data-pwned/.test(hostileHtml);
-  check("an agent named like an HTML tag is shown as text and never runs", !ran && hostileHtml.includes("&lt;img src=x onerror="), ran ? "the injected handler ran" : "the name was not shown as text");
+  check(
+    "an agent named like an HTML tag is shown as text and never runs",
+    !ran && hostileHtml.includes("&lt;img src=x onerror="),
+    ran ? "the injected handler ran" : "the name was not shown as text",
+  );
 
   const scoped = await dom(`/overview&token=${viewer}`);
-  check("a team viewer sees its own team's agents only", scoped.includes("support-bot") && !scoped.includes("billing-agent") && noErrors(scoped));
-  check("a team viewer has no audit or settings menu", !scoped.includes("Audit trail") && !scoped.includes(">Settings<"));
+  check(
+    "a team viewer sees its own team's agents only",
+    scoped.includes("support-bot") && !scoped.includes("billing-agent") && noErrors(scoped),
+  );
+  check(
+    "a team viewer has no audit or settings menu",
+    !scoped.includes("Audit trail") && !scoped.includes(">Settings<"),
+  );
   const forced = await dom(`/audit&token=${viewer}`);
-  check("a team viewer who opens the audit address lands on the overview", forced.includes("Traffic, last 24 hours") && noErrors(forced));
+  check(
+    "a team viewer who opens the audit address lands on the overview",
+    forced.includes("Traffic, last 24 hours") && noErrors(forced),
+  );
 } finally {
   app.server.closeAllConnections();
   app.server.close();

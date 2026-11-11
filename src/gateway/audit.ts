@@ -22,7 +22,9 @@ export interface VerifyResult {
 const GENESIS = "0".repeat(64);
 
 function digest(prevHash: string, at: string, type: string, actor: string, data: string): string {
-  return createHash("sha256").update(JSON.stringify([prevHash, at, type, actor, data])).digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify([prevHash, at, type, actor, data]))
+    .digest("hex");
 }
 
 function fromRow(row: any): AuditEvent {
@@ -63,10 +65,11 @@ export class AuditLog {
     const head = this.db.prepare("SELECT seq FROM audit_head WHERE id = 1").get();
     if (head) return;
     const last = this.db.prepare("SELECT seq, hash FROM audit ORDER BY seq DESC LIMIT 1").get() as
-      | { seq: number; hash: string }
-      | undefined;
+      { seq: number; hash: string } | undefined;
     if (last) {
-      this.db.prepare("INSERT INTO audit_head (id, seq, hash, mac) VALUES (1, ?, ?, ?)").run(last.seq, last.hash, this.mac(last.seq, last.hash));
+      this.db
+        .prepare("INSERT INTO audit_head (id, seq, hash, mac) VALUES (1, ?, ?, ?)")
+        .run(last.seq, last.hash, this.mac(last.seq, last.hash));
     }
   }
 
@@ -77,8 +80,7 @@ export class AuditLog {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const last = this.db.prepare("SELECT hash FROM audit ORDER BY seq DESC LIMIT 1").get() as
-        | { hash: string }
-        | undefined;
+        { hash: string } | undefined;
       const prevHash = last?.hash ?? GENESIS;
       const hash = digest(prevHash, at, type, actor, json);
       const result = this.db
@@ -109,7 +111,12 @@ export class AuditLog {
     let lastHash = GENESIS;
     for (const row of this.db.prepare("SELECT * FROM audit ORDER BY seq").all() as any[]) {
       if (row.prev_hash !== prev) {
-        return { ok: false, checked, brokenAt: row.seq, reason: "previous hash does not match (event removed or reordered)" };
+        return {
+          ok: false,
+          checked,
+          brokenAt: row.seq,
+          reason: "previous hash does not match (event removed or reordered)",
+        };
       }
       if (digest(row.prev_hash, row.at, row.type, row.actor, row.data) !== row.hash) {
         return { ok: false, checked, brokenAt: row.seq, reason: "event contents do not match its hash (event edited)" };
@@ -121,8 +128,7 @@ export class AuditLog {
     }
 
     const head = this.db.prepare("SELECT seq, hash, mac FROM audit_head WHERE id = 1").get() as
-      | { seq: number; hash: string; mac: string }
-      | undefined;
+      { seq: number; hash: string; mac: string } | undefined;
     if (!head) {
       return checked === 0 ? { ok: true, checked } : { ok: false, checked, reason: "the signed head is missing" };
     }

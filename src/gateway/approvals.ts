@@ -80,7 +80,11 @@ export class ApprovalQueue {
   }
 
   pendingForAgent(agentId: string): number {
-    return (this.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE agent_id = ? AND status = 'pending'").get(agentId) as { n: number }).n;
+    return (
+      this.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE agent_id = ? AND status = 'pending'").get(agentId) as {
+        n: number;
+      }
+    ).n;
   }
 
   /** Only a pending approval can be decided, and only once. Returns undefined otherwise. */
@@ -93,8 +97,7 @@ export class ApprovalQueue {
 
   response(id: string): StoredResponse | undefined {
     const row = this.db.prepare("SELECT response, content_type FROM approvals WHERE id = ?").get(id) as
-      | { response: string; content_type: string }
-      | undefined;
+      { response: string; content_type: string } | undefined;
     return row ? { body: row.response, contentType: row.content_type } : undefined;
   }
 }

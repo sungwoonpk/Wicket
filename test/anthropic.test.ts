@@ -23,35 +23,77 @@ describe("toAnthropicRequest", () => {
     assert.equal(out.system, "Be brief.\n\nBe kind.");
     assert.equal(out.max_tokens, 1024, "max_tokens is required by the API and defaults to 1024");
     assert.deepEqual(out.messages, [
-      { role: "user", content: [{ type: "text", text: "Hi" }, { type: "text", text: "Are you there?" }] },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Hi" },
+          { type: "text", text: "Are you there?" },
+        ],
+      },
       { role: "assistant", content: [{ type: "text", text: "Yes." }] },
     ]);
   });
 
   it("honors max_tokens, max_completion_tokens, stop and sampling settings", () => {
-    const a = toAnthropicRequest({ model: "m", messages: [{ role: "user", content: "x" }], max_tokens: 50, stop: "END", temperature: 0.2, top_p: 0.9 });
+    const a = toAnthropicRequest({
+      model: "m",
+      messages: [{ role: "user", content: "x" }],
+      max_tokens: 50,
+      stop: "END",
+      temperature: 0.2,
+      top_p: 0.9,
+    });
     assert.equal(a.max_tokens, 50);
     assert.deepEqual(a.stop_sequences, ["END"]);
     assert.equal(a.temperature, 0.2);
     assert.equal(a.top_p, 0.9);
-    assert.equal(toAnthropicRequest({ model: "m", messages: [{ role: "user", content: "x" }], max_completion_tokens: 77 }).max_tokens, 77);
-    assert.deepEqual(toAnthropicRequest({ model: "m", messages: [{ role: "user", content: "x" }], stop: ["a", "b"] }).stop_sequences, ["a", "b"]);
+    assert.equal(
+      toAnthropicRequest({ model: "m", messages: [{ role: "user", content: "x" }], max_completion_tokens: 77 })
+        .max_tokens,
+      77,
+    );
+    assert.deepEqual(
+      toAnthropicRequest({ model: "m", messages: [{ role: "user", content: "x" }], stop: ["a", "b"] }).stop_sequences,
+      ["a", "b"],
+    );
   });
 
   it("converts tools and every tool_choice form", () => {
-    const tools = [{ type: "function", function: { name: "refund", description: "Refund an order", parameters: { type: "object", properties: { amount: { type: "number" } } } } }];
+    const tools = [
+      {
+        type: "function",
+        function: {
+          name: "refund",
+          description: "Refund an order",
+          parameters: { type: "object", properties: { amount: { type: "number" } } },
+        },
+      },
+    ];
     const base = { model: "m", messages: [{ role: "user", content: "x" }], tools };
     const out = toAnthropicRequest({ ...base, tool_choice: "auto" });
-    assert.deepEqual(out.tools, [{ name: "refund", description: "Refund an order", input_schema: { type: "object", properties: { amount: { type: "number" } } } }]);
+    assert.deepEqual(out.tools, [
+      {
+        name: "refund",
+        description: "Refund an order",
+        input_schema: { type: "object", properties: { amount: { type: "number" } } },
+      },
+    ]);
     assert.deepEqual(out.tool_choice, { type: "auto" });
     assert.deepEqual(toAnthropicRequest({ ...base, tool_choice: "required" }).tool_choice, { type: "any" });
     assert.deepEqual(toAnthropicRequest({ ...base, tool_choice: "none" }).tool_choice, { type: "none" });
-    assert.deepEqual(toAnthropicRequest({ ...base, tool_choice: { type: "function", function: { name: "refund" } } }).tool_choice, { type: "tool", name: "refund" });
+    assert.deepEqual(
+      toAnthropicRequest({ ...base, tool_choice: { type: "function", function: { name: "refund" } } }).tool_choice,
+      { type: "tool", name: "refund" },
+    );
     assert.equal(toAnthropicRequest({ model: "m", messages: [{ role: "user", content: "x" }] }).tools, undefined);
   });
 
   it("gives a tool without a schema an empty object schema", () => {
-    const out = toAnthropicRequest({ model: "m", messages: [{ role: "user", content: "x" }], tools: [{ type: "function", function: { name: "ping" } }] });
+    const out = toAnthropicRequest({
+      model: "m",
+      messages: [{ role: "user", content: "x" }],
+      tools: [{ type: "function", function: { name: "ping" } }],
+    });
     assert.deepEqual(out.tools[0].input_schema, { type: "object", properties: {} });
   });
 
@@ -60,15 +102,25 @@ describe("toAnthropicRequest", () => {
       model: "m",
       messages: [
         { role: "user", content: "refund it" },
-        { role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "refund", arguments: '{"amount":5}' } }] },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "call_1", type: "function", function: { name: "refund", arguments: '{"amount":5}' } }],
+        },
         { role: "tool", tool_call_id: "call_1", content: "done" },
         { role: "tool", tool_call_id: "call_2", content: "also done" },
       ],
     });
-    assert.deepEqual(out.messages[1], { role: "assistant", content: [{ type: "tool_use", id: "call_1", name: "refund", input: { amount: 5 } }] });
+    assert.deepEqual(out.messages[1], {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "call_1", name: "refund", input: { amount: 5 } }],
+    });
     assert.deepEqual(out.messages[2], {
       role: "user",
-      content: [{ type: "tool_result", tool_use_id: "call_1", content: "done" }, { type: "tool_result", tool_use_id: "call_2", content: "also done" }],
+      content: [
+        { type: "tool_result", tool_use_id: "call_1", content: "done" },
+        { type: "tool_result", tool_use_id: "call_2", content: "also done" },
+      ],
     });
   });
 
@@ -81,24 +133,51 @@ describe("toAnthropicRequest", () => {
   });
 
   it("accepts text parts and refuses images", () => {
-    const ok = toAnthropicRequest({ model: "m", messages: [{ role: "user", content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] }] });
+    const ok = toAnthropicRequest({
+      model: "m",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "a" },
+            { type: "text", text: "b" },
+          ],
+        },
+      ],
+    });
     assert.equal(ok.messages[0].content[0].text, "ab");
     assert.throws(
-      () => toAnthropicRequest({ model: "m", messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "x" } }] }] }),
+      () =>
+        toAnthropicRequest({
+          model: "m",
+          messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "x" } }] }],
+        }),
       UnsupportedContentError,
     );
   });
 
   it("only asks for streaming when the request did", () => {
     assert.equal(toAnthropicRequest({ model: "m", messages: [{ role: "user", content: "x" }] }).stream, undefined);
-    assert.equal(toAnthropicRequest({ model: "m", messages: [{ role: "user", content: "x" }], stream: true }).stream, true);
+    assert.equal(
+      toAnthropicRequest({ model: "m", messages: [{ role: "user", content: "x" }], stream: true }).stream,
+      true,
+    );
   });
 });
 
 describe("fromAnthropicResponse", () => {
   it("converts text and usage", () => {
     const out = fromAnthropicResponse(
-      { id: "msg_1", model: "claude-test", content: [{ type: "text", text: "Hello" }, { type: "text", text: " there" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 4 } },
+      {
+        id: "msg_1",
+        model: "claude-test",
+        content: [
+          { type: "text", text: "Hello" },
+          { type: "text", text: " there" },
+        ],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 4 },
+      },
       "claude-test",
     );
     assert.equal(out.object, "chat.completion");
@@ -109,25 +188,46 @@ describe("fromAnthropicResponse", () => {
 
   it("converts tool use into tool_calls with JSON string arguments", () => {
     const out = fromAnthropicResponse(
-      { content: [{ type: "tool_use", id: "toolu_1", name: "refund", input: { amount: 500 } }], stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 } },
+      {
+        content: [{ type: "tool_use", id: "toolu_1", name: "refund", input: { amount: 500 } }],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
       "m",
     );
     const choice = out.choices[0];
     assert.equal(choice.finish_reason, "tool_calls");
     assert.equal(choice.message.content, null);
-    assert.deepEqual(choice.message.tool_calls, [{ id: "toolu_1", type: "function", function: { name: "refund", arguments: '{"amount":500}' } }]);
+    assert.deepEqual(choice.message.tool_calls, [
+      { id: "toolu_1", type: "function", function: { name: "refund", arguments: '{"amount":500}' } },
+    ]);
   });
 
   it("maps stop reasons and tolerates missing fields", () => {
-    assert.equal(fromAnthropicResponse({ content: [], stop_reason: "max_tokens" }, "m").choices[0].finish_reason, "length");
-    assert.equal(fromAnthropicResponse({ content: [], stop_reason: "something_new" }, "m").choices[0].finish_reason, "stop");
+    assert.equal(
+      fromAnthropicResponse({ content: [], stop_reason: "max_tokens" }, "m").choices[0].finish_reason,
+      "length",
+    );
+    assert.equal(
+      fromAnthropicResponse({ content: [], stop_reason: "something_new" }, "m").choices[0].finish_reason,
+      "stop",
+    );
     const bare = fromAnthropicResponse({}, "fallback-model");
     assert.equal(bare.model, "fallback-model");
     assert.deepEqual(bare.usage, { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 });
   });
 
   it("keeps text next to tool calls", () => {
-    const out = fromAnthropicResponse({ content: [{ type: "text", text: "Checking." }, { type: "tool_use", id: "t", name: "x", input: {} }], stop_reason: "tool_use" }, "m");
+    const out = fromAnthropicResponse(
+      {
+        content: [
+          { type: "text", text: "Checking." },
+          { type: "tool_use", id: "t", name: "x", input: {} },
+        ],
+        stop_reason: "tool_use",
+      },
+      "m",
+    );
     assert.equal(out.choices[0].message.content, "Checking.");
     assert.equal(out.choices[0].message.tool_calls.length, 1);
   });
@@ -135,7 +235,9 @@ describe("fromAnthropicResponse", () => {
 
 describe("fromAnthropicError", () => {
   it("keeps the message and type in the OpenAI shape", () => {
-    assert.deepEqual(fromAnthropicError({ type: "error", error: { type: "overloaded_error", message: "busy" } }), { error: { message: "busy", type: "overloaded_error" } });
+    assert.deepEqual(fromAnthropicError({ type: "error", error: { type: "overloaded_error", message: "busy" } }), {
+      error: { message: "busy", type: "overloaded_error" },
+    });
     assert.deepEqual(fromAnthropicError({}), { error: { message: "upstream error", type: "upstream_error" } });
   });
 });
@@ -182,13 +284,19 @@ describe("StreamTranslator", () => {
     let out = "";
     for (let i = 0; i < TEXT_STREAM.length; i += 7) out += pieces.push(TEXT_STREAM.slice(i, i + 7));
     out += pieces.end();
-    assert.deepEqual(parseChunks(out).map((c) => c.choices[0].delta), parseChunks(expected).map((c) => c.choices[0].delta));
+    assert.deepEqual(
+      parseChunks(out).map((c) => c.choices[0].delta),
+      parseChunks(expected).map((c) => c.choices[0].delta),
+    );
   });
 
   it("turns tool use into tool_call deltas that rebuild to the arguments", () => {
     const stream =
       sse("message_start", { message: { id: "msg_2", usage: { input_tokens: 3 } } }) +
-      sse("content_block_start", { index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "refund", input: {} } }) +
+      sse("content_block_start", {
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_1", name: "refund", input: {} },
+      }) +
       sse("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: '{"amo' } }) +
       sse("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: 'unt":500}' } }) +
       sse("content_block_stop", { index: 0 }) +
@@ -210,14 +318,25 @@ describe("StreamTranslator", () => {
       sse("content_block_start", { index: 2, content_block: { type: "tool_use", id: "b", name: "two", input: {} } }) +
       sse("content_block_delta", { index: 2, delta: { type: "input_json_delta", partial_json: "{}" } }) +
       sse("message_stop", {});
-    const fragments = parseChunks(new StreamTranslator("m").push(stream)).flatMap((c) => c.choices[0].delta.tool_calls ?? []);
-    assert.deepEqual(fragments.filter((f: any) => f.id).map((f: any) => [f.index, f.function.name]), [[0, "one"], [1, "two"]]);
+    const fragments = parseChunks(new StreamTranslator("m").push(stream)).flatMap(
+      (c) => c.choices[0].delta.tool_calls ?? [],
+    );
+    assert.deepEqual(
+      fragments.filter((f: any) => f.id).map((f: any) => [f.index, f.function.name]),
+      [
+        [0, "one"],
+        [1, "two"],
+      ],
+    );
     assert.equal(fragments.find((f: any) => f.function.arguments === "{}").index, 1);
   });
 
   it("passes an upstream error event through and stops", () => {
     const t = new StreamTranslator("m");
-    const out = t.push(sse("message_start", { message: { id: "m" } }) + sse("error", { error: { type: "overloaded_error", message: "busy" } }));
+    const out = t.push(
+      sse("message_start", { message: { id: "m" } }) +
+        sse("error", { error: { type: "overloaded_error", message: "busy" } }),
+    );
     assert.ok(out.includes('"overloaded_error"'));
     assert.ok(out.endsWith("data: [DONE]\n\n"));
     assert.equal(t.end(), "", "nothing more is sent after an error");

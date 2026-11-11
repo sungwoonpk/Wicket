@@ -6,7 +6,13 @@ import { costUsd } from "./pricing.js";
 import type { Outcome } from "./requests.js";
 import type { Services } from "./services.js";
 import type { Target } from "./upstreams.js";
-import { callUpstream, UnsupportedContentError, UpstreamConfigError, UpstreamTimeoutError, UpstreamUnreachableError } from "../providers/index.js";
+import {
+  callUpstream,
+  UnsupportedContentError,
+  UpstreamConfigError,
+  UpstreamTimeoutError,
+  UpstreamUnreachableError,
+} from "../providers/index.js";
 import { redactMessages, redactText } from "../policy/redact.js";
 import { decideToolCall, overallAction, toolCallsFromCompletion, toolCallsFromSse } from "../policy/tools.js";
 import type { Finding, ToolCall, ToolDecision } from "../policy/types.js";
@@ -45,7 +51,10 @@ export function authenticateAgent(svc: Services, req: IncomingMessage): Agent {
   const agent = key ? svc.agents.authenticate(key) : undefined;
   if (!agent) {
     const wait = svc.authFailures.take(`agent:${clientIp(req)}`, 20);
-    if (wait > 0) throw new HttpError(429, "too many failed attempts, try again later", "rate_limit_error", { "retry-after": String(wait) });
+    if (wait > 0)
+      throw new HttpError(429, "too many failed attempts, try again later", "rate_limit_error", {
+        "retry-after": String(wait),
+      });
     throw new HttpError(401, "invalid or missing API key", "authentication_error");
   }
   if (agent.disabled) throw new HttpError(403, "this agent is disabled", "permission_error");
@@ -53,12 +62,16 @@ export function authenticateAgent(svc: Services, req: IncomingMessage): Agent {
 }
 
 function validateChatBody(body: Record<string, any>): { model: string; stream: boolean } {
-  if (typeof body.model !== "string" || !MODEL_NAME.test(body.model)) throw new HttpError(400, "model must be a string of 1 to 200 safe characters");
-  if (!Array.isArray(body.messages) || body.messages.length === 0) throw new HttpError(400, "messages must be a non-empty list");
+  if (typeof body.model !== "string" || !MODEL_NAME.test(body.model))
+    throw new HttpError(400, "model must be a string of 1 to 200 safe characters");
+  if (!Array.isArray(body.messages) || body.messages.length === 0)
+    throw new HttpError(400, "messages must be a non-empty list");
   for (const m of body.messages) {
-    if (m === null || typeof m !== "object" || typeof m.role !== "string") throw new HttpError(400, "every message needs a role");
+    if (m === null || typeof m !== "object" || typeof m.role !== "string")
+      throw new HttpError(400, "every message needs a role");
   }
-  if (body.stream !== undefined && typeof body.stream !== "boolean") throw new HttpError(400, "stream must be true or false");
+  if (body.stream !== undefined && typeof body.stream !== "boolean")
+    throw new HttpError(400, "stream must be true or false");
   return { model: body.model, stream: body.stream === true };
 }
 
@@ -68,7 +81,12 @@ function argsDigest(args: Record<string, unknown>): string {
 
 /** What the audit trail and error bodies say about a decision. Argument values stay out: only a digest is kept. */
 function describeDecisions(decisions: ToolDecision[]) {
-  return decisions.map((d) => ({ name: d.call.name, action: d.action, reason: d.reason, argsSha256: argsDigest(d.call.args) }));
+  return decisions.map((d) => ({
+    name: d.call.name,
+    action: d.action,
+    reason: d.reason,
+    argsSha256: argsDigest(d.call.args),
+  }));
 }
 
 function publicDecisions(decisions: ToolDecision[]) {
@@ -77,7 +95,8 @@ function publicDecisions(decisions: ToolDecision[]) {
 
 function redactCompletion(body: any, detectors: Parameters<typeof redactText>[1]): { findings: Finding[] } {
   const merged = new Map<string, number>();
-  const note = (findings: Finding[]) => findings.forEach((f) => merged.set(f.type, (merged.get(f.type) ?? 0) + f.count));
+  const note = (findings: Finding[]) =>
+    findings.forEach((f) => merged.set(f.type, (merged.get(f.type) ?? 0) + f.count));
   for (const choice of body?.choices ?? []) {
     const message = choice?.message;
     if (!message) continue;
@@ -96,8 +115,23 @@ export async function handleChat(svc: Services, req: IncomingMessage, res: Serve
 
   const running = svc.inFlight.get(agent.id) ?? 0;
   if (agent.maxConcurrent !== null && running >= agent.maxConcurrent) {
-    svc.requests.add({ agentId: agent.id, model: "", stream: false, status: 429, latencyMs: 0, promptTokens: null, completionTokens: null, costUsd: 0, outcome: "rate_limited" });
-    throw new HttpError(429, `this agent may have at most ${agent.maxConcurrent} requests in flight`, "rate_limit_error", { "retry-after": "1" });
+    svc.requests.add({
+      agentId: agent.id,
+      model: "",
+      stream: false,
+      status: 429,
+      latencyMs: 0,
+      promptTokens: null,
+      completionTokens: null,
+      costUsd: 0,
+      outcome: "rate_limited",
+    });
+    throw new HttpError(
+      429,
+      `this agent may have at most ${agent.maxConcurrent} requests in flight`,
+      "rate_limit_error",
+      { "retry-after": "1" },
+    );
   }
   svc.inFlight.set(agent.id, running + 1);
   try {
@@ -115,7 +149,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
   const { model, stream } = validateChatBody(body);
   const started = performance.now();
   const requestId = String(res.getHeader("x-request-id") ?? "");
-  let target: Target | undefined;
+  const target: Target = svc.upstreams.resolve(model, svc.options.upstreamUrl);
 
   const checkBudget = () => {
     const budget = agent.monthlyBudgetUsd;
@@ -123,7 +157,13 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     const spent = svc.requests.spendThisMonth(agent.id);
     for (const { percent, type } of BUDGET_ALERTS) {
       if (spent >= (budget * percent) / 100 && svc.requests.claimBudgetAlert(agent.id, percent)) {
-        svc.audit.append(type, "system", { agentId: agent.id, name: agent.name, spentUsd: spent, budgetUsd: budget, percent });
+        svc.audit.append(type, "system", {
+          agentId: agent.id,
+          name: agent.name,
+          spentUsd: spent,
+          budgetUsd: budget,
+          percent,
+        });
         svc.log({ event: type, agentId: agent.id, spentUsd: spent, budgetUsd: budget });
       }
     }
@@ -133,14 +173,42 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     const latencyMs = Math.round(performance.now() - started);
     const cost = costUsd(svc.prices, model, usage.promptTokens, usage.completionTokens);
     svc.requests.add({
-      agentId: agent.id, model, stream, status, outcome, latencyMs,
-      promptTokens: usage.promptTokens ?? null, completionTokens: usage.completionTokens ?? null, costUsd: cost,
+      agentId: agent.id,
+      model,
+      stream,
+      status,
+      outcome,
+      latencyMs,
+      promptTokens: usage.promptTokens ?? null,
+      completionTokens: usage.completionTokens ?? null,
+      costUsd: cost,
     });
-    svc.log({ event: "request", requestId, agentId: agent.id, agent: agent.name, team: agent.team, model, upstream: target?.name, stream, status, outcome, latencyMs, costUsd: cost });
+    svc.log({
+      event: "request",
+      requestId,
+      agentId: agent.id,
+      agent: agent.name,
+      team: agent.team,
+      model,
+      upstream: target.name,
+      stream,
+      status,
+      outcome,
+      latencyMs,
+      costUsd: cost,
+    });
     if (cost > 0) checkBudget();
   };
 
-  const refuse = (outcome: Outcome, status: number, message: string, type: string, auditType: string, data: object = {}, headers: Record<string, string> = {}): never => {
+  const refuse = (
+    outcome: Outcome,
+    status: number,
+    message: string,
+    type: string,
+    auditType: string,
+    data: object = {},
+    headers: Record<string, string> = {},
+  ): never => {
     record(outcome, status);
     svc.audit.append(auditType, agent.id, { model, reason: message, ...data });
     throw new HttpError(status, message, type, headers);
@@ -150,18 +218,31 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     const wait = svc.limiter.take(agent.id, agent.ratePerMinute);
     if (wait > 0) {
       record("rate_limited", 429);
-      throw new HttpError(429, `rate limit of ${agent.ratePerMinute} requests per minute reached`, "rate_limit_error", { "retry-after": String(wait) });
+      throw new HttpError(429, `rate limit of ${agent.ratePerMinute} requests per minute reached`, "rate_limit_error", {
+        "retry-after": String(wait),
+      });
     }
   }
 
   if (agent.allowedModels && !agent.allowedModels.includes(model)) {
-    refuse("model_denied", 403, `model "${model}" is not allowed for this agent`, "permission_error", "request.denied", { rule: "allowed_models" });
+    refuse(
+      "model_denied",
+      403,
+      `model "${model}" is not allowed for this agent`,
+      "permission_error",
+      "request.denied",
+      { rule: "allowed_models" },
+    );
   }
 
   if (agent.monthlyBudgetUsd !== null) {
     const spent = svc.requests.spendThisMonth(agent.id);
     if (spent >= agent.monthlyBudgetUsd) {
-      refuse("budget_exceeded", 429, "monthly budget exhausted", "budget_exceeded", "request.denied", { rule: "monthly_budget", spentUsd: spent, budgetUsd: agent.monthlyBudgetUsd });
+      refuse("budget_exceeded", 429, "monthly budget exhausted", "budget_exceeded", "request.denied", {
+        rule: "monthly_budget",
+        spentUsd: spent,
+        budgetUsd: agent.monthlyBudgetUsd,
+      });
     }
   }
 
@@ -171,15 +252,20 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     const result = redactMessages(body.messages, policy.redaction.detectors);
     if (result.findings.length > 0) {
       if (policy.redaction.mode === "block") {
-        refuse("blocked_pii", 400, "request blocked: it contains sensitive data", "policy_violation", "request.blocked", { findings: result.findings });
+        refuse(
+          "blocked_pii",
+          400,
+          "request blocked: it contains sensitive data",
+          "policy_violation",
+          "request.blocked",
+          { findings: result.findings },
+        );
       }
       body = { ...body, messages: result.messages };
       redacted = true;
       svc.audit.append("request.redacted", agent.id, { model, findings: result.findings });
     }
   }
-
-  target = svc.upstreams.resolve(model, svc.options.upstreamUrl);
 
   // Stop the upstream call when the caller goes away or the upstream takes too long.
   const controller = new AbortController();
@@ -195,8 +281,8 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       throw new HttpError(504, "the upstream did not answer in time", "upstream_error");
     }
     if (err instanceof UpstreamConfigError) {
-      svc.audit.append("upstream.misconfigured", "system", { upstream: target?.name, detail: err.message });
-      svc.log({ event: "upstream.misconfigured", upstream: target?.name, detail: err.message });
+      svc.audit.append("upstream.misconfigured", "system", { upstream: target.name, detail: err.message });
+      svc.log({ event: "upstream.misconfigured", upstream: target.name, detail: err.message });
       record("upstream_error", 502);
       throw new HttpError(502, "the upstream is not configured correctly", "upstream_error");
     }
@@ -213,7 +299,11 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       throw err;
     }
     record("upstream_error", 502);
-    throw new HttpError(502, err instanceof UpstreamUnreachableError ? err.message : "upstream unreachable", "upstream_error");
+    throw new HttpError(
+      502,
+      err instanceof UpstreamUnreachableError ? err.message : "upstream unreachable",
+      "upstream_error",
+    );
   };
 
   try {
@@ -247,7 +337,11 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       } catch (err) {
         // Headers are already sent, so the stream can only be cut short.
         res.end();
-        record((err as Error)?.name === "AbortError" ? "cancelled" : "upstream_error", upstream.status, extractUsage(captured, true));
+        record(
+          (err as Error)?.name === "AbortError" ? "cancelled" : "upstream_error",
+          upstream.status,
+          extractUsage(captured, true),
+        );
       }
       return;
     }
@@ -284,17 +378,28 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
         record("denied_tool", 403, usage);
         svc.audit.append("tool.denied", agent.id, { model, decisions: describeDecisions(decisions) });
         const denied = decisions.find((d) => d.action === "deny")!;
-        throw new HttpError(403, `tool call "${denied.call.name}" was denied by policy: ${denied.reason}`, "policy_violation", {}, { tool_calls: publicDecisions(decisions) });
+        throw new HttpError(
+          403,
+          `tool call "${denied.call.name}" was denied by policy: ${denied.reason}`,
+          "policy_violation",
+          {},
+          { tool_calls: publicDecisions(decisions) },
+        );
       }
 
       if (action === "require_approval") {
         if (svc.approvals.pendingForAgent(agent.id) >= svc.options.maxPendingApprovalsPerAgent) {
           record("rate_limited", 429, usage);
-          throw new HttpError(429, "this agent has too many tool calls waiting for approval", "rate_limit_error", { "retry-after": "30" });
+          throw new HttpError(429, "this agent has too many tool calls waiting for approval", "rate_limit_error", {
+            "retry-after": "30",
+          });
         }
         const approval = svc.approvals.hold(agent.id, decisions, { body: text, contentType: upstream.contentType });
         record("pending_approval", 202, usage);
-        svc.audit.append("approval.requested", agent.id, { approvalId: approval.id, decisions: describeDecisions(decisions.filter((d) => d.action === "require_approval")) });
+        svc.audit.append("approval.requested", agent.id, {
+          approvalId: approval.id,
+          decisions: describeDecisions(decisions.filter((d) => d.action === "require_approval")),
+        });
         sendJson(res, 202, {
           object: "wicket.approval_required",
           approval_id: approval.id,

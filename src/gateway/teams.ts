@@ -22,7 +22,9 @@ export class TeamStore {
 
   /** Creates the team if it does not exist yet. Returns it either way. */
   ensure(id: string, name = id): Team {
-    this.db.prepare("INSERT OR IGNORE INTO teams (id, name, created_at) VALUES (?, ?, ?)").run(id, name, new Date().toISOString());
+    this.db
+      .prepare("INSERT OR IGNORE INTO teams (id, name, created_at) VALUES (?, ?, ?)")
+      .run(id, name, new Date().toISOString());
     return this.get(id)!;
   }
 

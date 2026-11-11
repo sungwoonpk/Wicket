@@ -13,20 +13,24 @@ export function parsePolicy(input: unknown): Policy {
   const doc = input as Record<string, any>;
 
   const redaction = doc.redaction ?? DEFAULT_POLICY.redaction;
-  if (!["off", "redact", "block"].includes(redaction.mode)) throw new PolicyError("redaction.mode must be off, redact or block");
+  if (!["off", "redact", "block"].includes(redaction.mode))
+    throw new PolicyError("redaction.mode must be off, redact or block");
   const detectors: Detector[] = redaction.detectors ?? DEFAULT_POLICY.redaction.detectors;
   if (!Array.isArray(detectors) || detectors.some((d) => !DETECTORS.includes(d))) {
     throw new PolicyError(`redaction.detectors must be a list of: ${DETECTORS.join(", ")}`);
   }
 
   const defaultToolAction = doc.defaultToolAction ?? "allow";
-  if (!ACTIONS.includes(defaultToolAction)) throw new PolicyError("defaultToolAction must be allow, deny or require_approval");
+  if (!ACTIONS.includes(defaultToolAction))
+    throw new PolicyError("defaultToolAction must be allow, deny or require_approval");
 
   const tools = doc.tools ?? [];
   if (!Array.isArray(tools)) throw new PolicyError("tools must be a list");
   const rules = tools.map((rule: any, i: number) => {
-    if (typeof rule?.tool !== "string" || rule.tool === "") throw new PolicyError(`tools[${i}].tool must be a non-empty string`);
-    if (!ACTIONS.includes(rule.action)) throw new PolicyError(`tools[${i}].action must be allow, deny or require_approval`);
+    if (typeof rule?.tool !== "string" || rule.tool === "")
+      throw new PolicyError(`tools[${i}].tool must be a non-empty string`);
+    if (!ACTIONS.includes(rule.action))
+      throw new PolicyError(`tools[${i}].action must be allow, deny or require_approval`);
     const when = rule.when ?? [];
     if (!Array.isArray(when)) throw new PolicyError(`tools[${i}].when must be a list`);
     for (const c of when) {
@@ -71,7 +75,8 @@ export class PolicyStore {
 
   /** A team's own policy, or undefined when the team follows the organization policy. */
   getTeam(team: string): Policy | undefined {
-    const row = this.db.prepare("SELECT doc FROM team_policies WHERE team = ?").get(team) as { doc: string } | undefined;
+    const row = this.db.prepare("SELECT doc FROM team_policies WHERE team = ?").get(team) as
+      { doc: string } | undefined;
     return row ? parsePolicy(JSON.parse(row.doc)) : undefined;
   }
 
@@ -94,6 +99,8 @@ export class PolicyStore {
 
   /** Teams that have their own policy. */
   teamsWithPolicy(): string[] {
-    return (this.db.prepare("SELECT team FROM team_policies ORDER BY team").all() as { team: string }[]).map((r) => r.team);
+    return (this.db.prepare("SELECT team FROM team_policies ORDER BY team").all() as { team: string }[]).map(
+      (r) => r.team,
+    );
   }
 }

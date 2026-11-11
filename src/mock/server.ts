@@ -26,7 +26,11 @@ async function readJson(req: IncomingMessage): Promise<any> {
 
 function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   const payload = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(payload), ...headers });
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(payload),
+    ...headers,
+  });
   res.end(payload);
 }
 
@@ -37,7 +41,8 @@ function sleep(ms: number): Promise<void> {
 /** The text of a message, whether its content is a string or a list of text parts. */
 function contentText(content: unknown): string {
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map((p) => (p && typeof p === "object" ? String((p as any).text ?? "") : "")).join("");
+  if (Array.isArray(content))
+    return content.map((p) => (p && typeof p === "object" ? String((p as any).text ?? "") : "")).join("");
   return "";
 }
 
@@ -94,12 +99,24 @@ function scenarioFor(messages: ChatMessage[]): Scenario {
   return s;
 }
 
-function openAiStream(res: ServerResponse, model: string, reply: string, toolCall: MockToolCall | undefined, usage: object): void {
+function openAiStream(
+  res: ServerResponse,
+  model: string,
+  reply: string,
+  toolCall: MockToolCall | undefined,
+  usage: object,
+): void {
   const id = "chatcmpl-mock";
   const created = 0;
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
   const send = (delta: object, finish: string | null, withUsage = false) => {
-    const chunk: any = { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: finish }] };
+    const chunk: any = {
+      id,
+      object: "chat.completion.chunk",
+      created,
+      model,
+      choices: [{ index: 0, delta, finish_reason: finish }],
+    };
     if (withUsage) chunk.usage = usage;
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
   };
@@ -107,34 +124,82 @@ function openAiStream(res: ServerResponse, model: string, reply: string, toolCal
   if (toolCall) {
     // Split the arguments in two fragments, as real providers stream them.
     const half = Math.ceil(toolCall.arguments.length / 2);
-    send({ role: "assistant", tool_calls: [{ index: 0, id: "call_mock_1", type: "function", function: { name: toolCall.name, arguments: toolCall.arguments.slice(0, half) } }] }, null);
+    send(
+      {
+        role: "assistant",
+        tool_calls: [
+          {
+            index: 0,
+            id: "call_mock_1",
+            type: "function",
+            function: { name: toolCall.name, arguments: toolCall.arguments.slice(0, half) },
+          },
+        ],
+      },
+      null,
+    );
     send({ tool_calls: [{ index: 0, function: { arguments: toolCall.arguments.slice(half) } }] }, null);
     send({}, "tool_calls", true);
   } else {
-    reply.split(" ").forEach((word, i) => send(i === 0 ? { role: "assistant", content: word } : { content: ` ${word}` }, null));
+    reply
+      .split(" ")
+      .forEach((word, i) => send(i === 0 ? { role: "assistant", content: word } : { content: ` ${word}` }, null));
     send({}, "stop", true);
   }
   res.write("data: [DONE]\n\n");
   res.end();
 }
 
-function anthropicStream(res: ServerResponse, model: string, reply: string, toolCall: MockToolCall | undefined, inputTokens: number, outputTokens: number): void {
+function anthropicStream(
+  res: ServerResponse,
+  model: string,
+  reply: string,
+  toolCall: MockToolCall | undefined,
+  inputTokens: number,
+  outputTokens: number,
+): void {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-  const send = (event: string, data: object) => res.write(`event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`);
-  send("message_start", { message: { id: "msg_mock", type: "message", role: "assistant", model, content: [], usage: { input_tokens: inputTokens, output_tokens: 1 } } });
+  const send = (event: string, data: object) =>
+    res.write(`event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`);
+  send("message_start", {
+    message: {
+      id: "msg_mock",
+      type: "message",
+      role: "assistant",
+      model,
+      content: [],
+      usage: { input_tokens: inputTokens, output_tokens: 1 },
+    },
+  });
   send("ping", {});
   if (toolCall) {
-    send("content_block_start", { index: 0, content_block: { type: "tool_use", id: "toolu_mock_1", name: toolCall.name, input: {} } });
+    send("content_block_start", {
+      index: 0,
+      content_block: { type: "tool_use", id: "toolu_mock_1", name: toolCall.name, input: {} },
+    });
     const half = Math.ceil(toolCall.arguments.length / 2);
-    send("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: toolCall.arguments.slice(0, half) } });
-    send("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: toolCall.arguments.slice(half) } });
+    send("content_block_delta", {
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: toolCall.arguments.slice(0, half) },
+    });
+    send("content_block_delta", {
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: toolCall.arguments.slice(half) },
+    });
     send("content_block_stop", { index: 0 });
   } else {
     send("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
-    reply.split(" ").forEach((word, i) => send("content_block_delta", { index: 0, delta: { type: "text_delta", text: i === 0 ? word : ` ${word}` } }));
+    reply
+      .split(" ")
+      .forEach((word, i) =>
+        send("content_block_delta", { index: 0, delta: { type: "text_delta", text: i === 0 ? word : ` ${word}` } }),
+      );
     send("content_block_stop", { index: 0 });
   }
-  send("message_delta", { delta: { stop_reason: toolCall ? "tool_use" : "end_turn" }, usage: { output_tokens: outputTokens } });
+  send("message_delta", {
+    delta: { stop_reason: toolCall ? "tool_use" : "end_turn" },
+    usage: { output_tokens: outputTokens },
+  });
   send("message_stop", {});
   res.end();
 }
@@ -157,7 +222,10 @@ export function createMockUpstream(options: MockOptions = {}): Server {
           return;
         }
         if (!req.headers["anthropic-version"]) {
-          sendJson(res, 400, { type: "error", error: { type: "invalid_request_error", message: "anthropic-version header is required" } });
+          sendJson(res, 400, {
+            type: "error",
+            error: { type: "invalid_request_error", message: "anthropic-version header is required" },
+          });
           return;
         }
       }
@@ -170,7 +238,10 @@ export function createMockUpstream(options: MockOptions = {}): Server {
         return;
       }
       if (anthropic && typeof body.max_tokens !== "number") {
-        sendJson(res, 400, { type: "error", error: { type: "invalid_request_error", message: "max_tokens is required" } });
+        sendJson(res, 400, {
+          type: "error",
+          error: { type: "invalid_request_error", message: "max_tokens is required" },
+        });
         return;
       }
 
@@ -179,7 +250,12 @@ export function createMockUpstream(options: MockOptions = {}): Server {
       if (scenario.slowMs) await sleep(scenario.slowMs);
       if (scenario.status) {
         const error = { message: `mock error ${scenario.status}`, type: "mock_error" };
-        sendJson(res, scenario.status, anthropic ? { type: "error", error } : { error }, scenario.status === 429 ? { "retry-after": "1" } : {});
+        sendJson(
+          res,
+          scenario.status,
+          anthropic ? { type: "error", error } : { error },
+          scenario.status === 429 ? { "retry-after": "1" } : {},
+        );
         return;
       }
       if (scenario.badJson) {
@@ -203,29 +279,48 @@ export function createMockUpstream(options: MockOptions = {}): Server {
           ? [{ type: "tool_use", id: "toolu_mock_1", name: toolCall.name, input: JSON.parse(toolCall.arguments) }]
           : [{ type: "text", text: reply }];
         sendJson(res, 200, {
-          id: "msg_mock", type: "message", role: "assistant", model, content,
+          id: "msg_mock",
+          type: "message",
+          role: "assistant",
+          model,
+          content,
           stop_reason: toolCall ? "tool_use" : "end_turn",
           usage: { input_tokens: promptTokens, output_tokens: completionTokens },
         });
         return;
       }
 
-      const usage = { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens };
+      const usage = {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: promptTokens + completionTokens,
+      };
       if (body.stream) {
         openAiStream(res, model, reply, toolCall, usage);
         return;
       }
       const message = toolCall
-        ? { role: "assistant", content: null, tool_calls: [{ id: "call_mock_1", type: "function", function: { name: toolCall.name, arguments: toolCall.arguments } }] }
+        ? {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              { id: "call_mock_1", type: "function", function: { name: toolCall.name, arguments: toolCall.arguments } },
+            ],
+          }
         : { role: "assistant", content: reply };
       sendJson(res, 200, {
-        id: "chatcmpl-mock", object: "chat.completion", created: 0, model,
+        id: "chatcmpl-mock",
+        object: "chat.completion",
+        created: 0,
+        model,
         choices: [{ index: 0, message, finish_reason: toolCall ? "tool_calls" : "stop" }],
         usage,
       });
     } catch (err) {
       const bad = err instanceof SyntaxError;
-      sendJson(res, bad ? 400 : 500, { error: { message: bad ? "invalid JSON body" : "internal error", type: "invalid_request_error" } });
+      sendJson(res, bad ? 400 : 500, {
+        error: { message: bad ? "invalid JSON body" : "internal error", type: "invalid_request_error" },
+      });
     }
   });
 }

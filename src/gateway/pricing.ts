@@ -31,7 +31,8 @@ export function costUsd(
  * stops the gateway at start-up instead of silently pricing requests at zero.
  */
 export function parsePriceTable(input: unknown): PriceTable {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) throw new Error("the price table must be a JSON object");
+  if (input === null || typeof input !== "object" || Array.isArray(input))
+    throw new Error("the price table must be a JSON object");
   const table: PriceTable = {};
   for (const [model, price] of Object.entries(input as Record<string, unknown>)) {
     const p = price as Partial<Price> | null;

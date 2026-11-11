@@ -32,7 +32,13 @@ export interface NewUpstream {
   models: string[];
 }
 
-const BLOCKED_HOSTS = new Set(["metadata.google.internal", "metadata", "169.254.169.254", "fd00:ec2::254", "[fd00:ec2::254]"]);
+const BLOCKED_HOSTS = new Set([
+  "metadata.google.internal",
+  "metadata",
+  "169.254.169.254",
+  "fd00:ec2::254",
+  "[fd00:ec2::254]",
+]);
 
 /**
  * Checks an upstream address an admin typed in. It must be http or https, carry no credentials,
@@ -50,7 +56,8 @@ export function validateUpstreamUrl(value: unknown): string {
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("baseUrl must use http or https");
   if (url.username || url.password) throw new Error("baseUrl must not contain credentials");
   const host = url.hostname.toLowerCase();
-  if (BLOCKED_HOSTS.has(host) || /^169\.254\./.test(host)) throw new Error("baseUrl points at a metadata address, which is not allowed");
+  if (BLOCKED_HOSTS.has(host) || /^169\.254\./.test(host))
+    throw new Error("baseUrl points at a metadata address, which is not allowed");
   return value.replace(/\/+$/, "");
 }
 
@@ -73,8 +80,17 @@ export class UpstreamStore {
 
   create(input: NewUpstream): Upstream {
     const result = this.db
-      .prepare("INSERT INTO upstreams (name, kind, base_url, api_key_env, models, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(input.name, input.kind, input.baseUrl.replace(/\/+$/, ""), input.apiKeyEnv ?? null, JSON.stringify(input.models), new Date().toISOString());
+      .prepare(
+        "INSERT INTO upstreams (name, kind, base_url, api_key_env, models, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        input.name,
+        input.kind,
+        input.baseUrl.replace(/\/+$/, ""),
+        input.apiKeyEnv ?? null,
+        JSON.stringify(input.models),
+        new Date().toISOString(),
+      );
     return this.get(Number(result.lastInsertRowid))!;
   }
 

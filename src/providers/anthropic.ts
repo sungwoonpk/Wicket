@@ -22,7 +22,8 @@ function textOf(content: unknown): string {
   if (Array.isArray(content)) {
     return content
       .map((part) => {
-        if (part && typeof part === "object" && (part as Json).type === "text") return String((part as Json).text ?? "");
+        if (part && typeof part === "object" && (part as Json).type === "text")
+          return String((part as Json).text ?? "");
         throw new UnsupportedContentError("only text content is supported for Anthropic upstreams");
       })
       .join("");
@@ -70,7 +71,12 @@ export function toAnthropicRequest(body: Json): Json {
       const text = textOf(m.content);
       if (text !== "") blocks.push({ type: "text", text });
       for (const tc of (m.tool_calls ?? []) as Json[]) {
-        blocks.push({ type: "tool_use", id: tc.id, name: tc.function?.name, input: parseArguments(tc.function?.arguments) });
+        blocks.push({
+          type: "tool_use",
+          id: tc.id,
+          name: tc.function?.name,
+          input: parseArguments(tc.function?.arguments),
+        });
       }
       push("assistant", blocks);
     } else if (m.role === "tool") {
@@ -113,7 +119,10 @@ function usageOf(usage: Json | undefined): Json {
 /** Converts a Messages API response body into an OpenAI chat completion. */
 export function fromAnthropicResponse(body: Json, requestedModel: string): Json {
   const blocks = (body.content ?? []) as Json[];
-  const text = blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
+  const text = blocks
+    .filter((b) => b.type === "text")
+    .map((b) => b.text ?? "")
+    .join("");
   const toolCalls = blocks
     .filter((b) => b.type === "tool_use")
     .map((b) => ({ id: b.id, type: "function", function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) } }));
@@ -180,7 +189,9 @@ export class StreamTranslator {
         if (block.type !== "tool_use") return "";
         const index = this.nextTool++;
         this.toolIndex.set(event.index, index);
-        return this.chunk({ tool_calls: [{ index, id: block.id, type: "function", function: { name: block.name, arguments: "" } }] });
+        return this.chunk({
+          tool_calls: [{ index, id: block.id, type: "function", function: { name: block.name, arguments: "" } }],
+        });
       }
       case "content_block_delta": {
         const delta = event.delta ?? {};
@@ -212,7 +223,11 @@ export class StreamTranslator {
   private finalize(): string {
     if (this.done) return "";
     this.done = true;
-    const usage = { prompt_tokens: this.promptTokens, completion_tokens: this.completionTokens, total_tokens: this.promptTokens + this.completionTokens };
+    const usage = {
+      prompt_tokens: this.promptTokens,
+      completion_tokens: this.completionTokens,
+      total_tokens: this.promptTokens + this.completionTokens,
+    };
     return this.chunk({}, this.finish ?? "stop", usage) + "data: [DONE]\n\n";
   }
 

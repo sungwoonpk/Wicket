@@ -22,7 +22,12 @@ describe("AgentStore", () => {
   it("creates agents, authenticates by key and never stores the key", () => {
     const db = openDb();
     const store = new AgentStore(db);
-    const { agent, key } = store.create({ name: "bot", team: "support", monthlyBudgetUsd: 5, allowedModels: ["demo-small"] });
+    const { agent, key } = store.create({
+      name: "bot",
+      team: "support",
+      monthlyBudgetUsd: 5,
+      allowedModels: ["demo-small"],
+    });
     assert.equal(store.authenticate(key)?.id, agent.id);
     assert.equal(store.authenticate("wk_nope"), undefined);
     assert.equal(agent.team, "support");
@@ -99,8 +104,18 @@ describe("AuditLog", () => {
 
 describe("ApprovalQueue", () => {
   const decisions = [
-    { call: { name: "refund", args: { amount: 500 }, argsValid: true }, action: "require_approval" as const, reason: "large refund", ruleIndex: 0 },
-    { call: { name: "lookup", args: {}, argsValid: true }, action: "allow" as const, reason: "default action", ruleIndex: null },
+    {
+      call: { name: "refund", args: { amount: 500 }, argsValid: true },
+      action: "require_approval" as const,
+      reason: "large refund",
+      ruleIndex: 0,
+    },
+    {
+      call: { name: "lookup", args: {}, argsValid: true },
+      action: "allow" as const,
+      reason: "default action",
+      ruleIndex: null,
+    },
   ];
 
   it("holds a response and releases it only after a single decision", () => {
@@ -128,7 +143,15 @@ describe("ApprovalQueue", () => {
 });
 
 describe("RequestStore", () => {
-  const base = { agentId: "a", model: "m", stream: false, status: 200, latencyMs: 5, promptTokens: 10, completionTokens: 20 };
+  const base = {
+    agentId: "a",
+    model: "m",
+    stream: false,
+    status: 200,
+    latencyMs: 5,
+    promptTokens: 10,
+    completionTokens: 20,
+  };
 
   it("sums spend for the current month only", () => {
     const store = new RequestStore(openDb());
@@ -191,7 +214,10 @@ describe("policy store", () => {
     assert.throws(() => parsePolicy(null), PolicyError);
     assert.throws(() => parsePolicy({ redaction: { mode: "sometimes" } }), PolicyError);
     assert.throws(() => parsePolicy({ tools: [{ tool: "x", action: "explode" }] }), PolicyError);
-    assert.throws(() => parsePolicy({ tools: [{ tool: "x", action: "deny", when: [{ arg: "a", op: "matches", value: "(" }] }] }), PolicyError);
+    assert.throws(
+      () => parsePolicy({ tools: [{ tool: "x", action: "deny", when: [{ arg: "a", op: "matches", value: "(" }] }] }),
+      PolicyError,
+    );
     assert.throws(() => parsePolicy({ defaultToolAction: "maybe" }), PolicyError);
   });
 });
@@ -224,7 +250,10 @@ describe("signed audit head", () => {
     audit.append("a", "x");
     audit.append("b", "x");
     db.prepare("DELETE FROM audit WHERE seq = 2").run();
-    const last = db.prepare("SELECT seq, hash FROM audit ORDER BY seq DESC LIMIT 1").get() as { seq: number; hash: string };
+    const last = db.prepare("SELECT seq, hash FROM audit ORDER BY seq DESC LIMIT 1").get() as {
+      seq: number;
+      hash: string;
+    };
     db.prepare("UPDATE audit_head SET seq = ?, hash = ?, mac = 'guess'").run(last.seq, last.hash);
     const result = audit.verify();
     assert.equal(result.ok, false);
@@ -261,7 +290,10 @@ describe("signed audit head", () => {
 describe("TeamStore", () => {
   it("creates teams once, lists them and renames them", () => {
     const teams = new TeamStore(openDb());
-    assert.deepEqual(teams.list().map((t) => t.id), ["default"]);
+    assert.deepEqual(
+      teams.list().map((t) => t.id),
+      ["default"],
+    );
     teams.ensure("support", "Support");
     teams.ensure("support", "ignored");
     assert.equal(teams.get("support")?.name, "Support");
@@ -272,7 +304,8 @@ describe("TeamStore", () => {
 
   it("accepts only lowercase slugs", () => {
     for (const ok of ["a", "support", "team-1", "0day"]) assert.ok(isTeamSlug(ok), ok);
-    for (const bad of ["", "Support", "-lead", "has space", "x".repeat(41), "a_b", 5, null, undefined, "a/b"]) assert.ok(!isTeamSlug(bad), String(bad));
+    for (const bad of ["", "Support", "-lead", "has space", "x".repeat(41), "a_b", 5, null, undefined, "a/b"])
+      assert.ok(!isTeamSlug(bad), String(bad));
   });
 });
 
@@ -289,7 +322,11 @@ describe("AdminKeyStore", () => {
     store.setDisabled(adminKey.id, true);
     assert.equal(store.authenticate(key), undefined);
     assert.equal(store.setDisabled("admin_missing", true), undefined);
-    assert.ok(ROLE_LEVEL.viewer < ROLE_LEVEL.approver && ROLE_LEVEL.approver < ROLE_LEVEL.admin && ROLE_LEVEL.admin < ROLE_LEVEL.owner);
+    assert.ok(
+      ROLE_LEVEL.viewer < ROLE_LEVEL.approver &&
+        ROLE_LEVEL.approver < ROLE_LEVEL.admin &&
+        ROLE_LEVEL.admin < ROLE_LEVEL.owner,
+    );
   });
 });
 
@@ -298,8 +335,19 @@ describe("UpstreamStore", () => {
 
   it("falls back when no upstream matches and honors order, case and disabled state", () => {
     const s = store();
-    assert.deepEqual(s.resolve("gpt-x", "http://fallback"), { name: "default", kind: "openai", baseUrl: "http://fallback", apiKeyEnv: null });
-    const a = s.create({ name: "a", kind: "anthropic", baseUrl: "https://a.example/", apiKeyEnv: "A_KEY", models: ["claude-*"] });
+    assert.deepEqual(s.resolve("gpt-x", "http://fallback"), {
+      name: "default",
+      kind: "openai",
+      baseUrl: "http://fallback",
+      apiKeyEnv: null,
+    });
+    const a = s.create({
+      name: "a",
+      kind: "anthropic",
+      baseUrl: "https://a.example/",
+      apiKeyEnv: "A_KEY",
+      models: ["claude-*"],
+    });
     s.create({ name: "b", kind: "openai", baseUrl: "https://b.example", models: ["claude-opus*", "gpt-*"] });
     assert.equal(s.resolve("claude-opus-1", "x").name, "a", "first match wins");
     assert.equal(s.resolve("CLAUDE-OPUS-1", "x").name, "a", "case does not matter");
@@ -334,7 +382,19 @@ describe("validateUpstreamUrl", () => {
   });
 
   it("refuses metadata services, other schemes, credentials and junk", () => {
-    for (const bad of ["http://169.254.169.254", "http://169.254.0.1/x", "http://metadata.google.internal", "http://[fd00:ec2::254]/", "ftp://x.example", "file:///etc/passwd", "https://a:b@x.example", "x", "", 5, null]) {
+    for (const bad of [
+      "http://169.254.169.254",
+      "http://169.254.0.1/x",
+      "http://metadata.google.internal",
+      "http://[fd00:ec2::254]/",
+      "ftp://x.example",
+      "file:///etc/passwd",
+      "https://a:b@x.example",
+      "x",
+      "",
+      5,
+      null,
+    ]) {
       assert.throws(() => validateUpstreamUrl(bad), Error, String(bad));
     }
   });
@@ -357,13 +417,24 @@ describe("AgentStore extras", () => {
     store.create({ name: "a", team: "one" });
     store.create({ name: "b", team: "two" });
     assert.equal(store.list().length, 2);
-    assert.deepEqual(store.list("two").map((a) => a.name), ["b"]);
+    assert.deepEqual(
+      store.list("two").map((a) => a.name),
+      ["b"],
+    );
     assert.deepEqual(store.list("none"), []);
   });
 });
 
 describe("RequestStore extras", () => {
-  const base = { model: "m", stream: false, status: 200, latencyMs: 1, promptTokens: 1, completionTokens: 1, costUsd: 0.5 };
+  const base = {
+    model: "m",
+    stream: false,
+    status: 200,
+    latencyMs: 1,
+    promptTokens: 1,
+    completionTokens: 1,
+    costUsd: 0.5,
+  };
 
   it("scopes summaries, recent requests and filters by team", () => {
     const db = openDb();
@@ -392,8 +463,14 @@ describe("RequestStore extras", () => {
     store.add({ ...base, agentId: a.id, outcome: "ok" }, new Date("2026-11-15T10:05:00Z"));
     store.add({ ...base, agentId: a.id, outcome: "ok" }, new Date("2026-11-14T01:00:00Z"));
     const series = store.timeseries(4, null, now);
-    assert.deepEqual(series.map((b) => b.bucket), ["2026-11-15T09:00:00.000Z", "2026-11-15T10:00:00.000Z", "2026-11-15T11:00:00.000Z", "2026-11-15T12:00:00.000Z"]);
-    assert.deepEqual(series.map((b) => b.total), [0, 1, 0, 2]);
+    assert.deepEqual(
+      series.map((b) => b.bucket),
+      ["2026-11-15T09:00:00.000Z", "2026-11-15T10:00:00.000Z", "2026-11-15T11:00:00.000Z", "2026-11-15T12:00:00.000Z"],
+    );
+    assert.deepEqual(
+      series.map((b) => b.total),
+      [0, 1, 0, 2],
+    );
     assert.deepEqual(series[3]!.byOutcome, { ok: 1, redacted: 1 });
     assert.equal(series[3]!.spendUsd, 1);
   });
@@ -433,9 +510,13 @@ describe("migrations", () => {
     try {
       const path = join(dir, "w.db");
       const db = openDb(path);
-      db.exec("PRAGMA user_version = 1; DROP TABLE teams; DROP TABLE team_policies; DROP TABLE admin_keys; DROP TABLE upstreams; DROP TABLE budget_alerts; DROP TABLE audit_head; DROP INDEX requests_at;");
+      db.exec(
+        "PRAGMA user_version = 1; DROP TABLE teams; DROP TABLE team_policies; DROP TABLE admin_keys; DROP TABLE upstreams; DROP TABLE budget_alerts; DROP TABLE audit_head; DROP INDEX requests_at;",
+      );
       db.exec("ALTER TABLE agents DROP COLUMN max_concurrent");
-      db.prepare("INSERT INTO agents (id, name, team, key_hash, created_at) VALUES ('agent_old', 'old', 'legacy', 'h', '2026-01-01')").run();
+      db.prepare(
+        "INSERT INTO agents (id, name, team, key_hash, created_at) VALUES ('agent_old', 'old', 'legacy', 'h', '2026-01-01')",
+      ).run();
       db.close();
       const upgraded = openDb(path);
       assert.equal((upgraded.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 2);
@@ -451,12 +532,24 @@ describe("migrations", () => {
 describe("parsePriceTable", () => {
   it("accepts a valid table", async () => {
     const { parsePriceTable } = await import("../src/gateway/pricing.js");
-    assert.deepEqual(parsePriceTable({ "gpt-x": { inputPerM: 2.5, outputPerM: 10 }, "*": { inputPerM: 1, outputPerM: 1 } })["gpt-x"], { inputPerM: 2.5, outputPerM: 10 });
+    assert.deepEqual(
+      parsePriceTable({ "gpt-x": { inputPerM: 2.5, outputPerM: 10 }, "*": { inputPerM: 1, outputPerM: 1 } })["gpt-x"],
+      { inputPerM: 2.5, outputPerM: 10 },
+    );
   });
 
   it("refuses anything that could silently price requests at zero", async () => {
     const { parsePriceTable } = await import("../src/gateway/pricing.js");
-    for (const bad of [null, [], "x", { m: null }, { m: { inputPerM: 1 } }, { m: { inputPerM: -1, outputPerM: 1 } }, { m: { inputPerM: "1", outputPerM: 1 } }, { m: { inputPerM: NaN, outputPerM: 1 } }]) {
+    for (const bad of [
+      null,
+      [],
+      "x",
+      { m: null },
+      { m: { inputPerM: 1 } },
+      { m: { inputPerM: -1, outputPerM: 1 } },
+      { m: { inputPerM: "1", outputPerM: 1 } },
+      { m: { inputPerM: NaN, outputPerM: 1 } },
+    ]) {
       assert.throws(() => parsePriceTable(bad), Error, JSON.stringify(bad));
     }
   });

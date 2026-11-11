@@ -42,7 +42,10 @@ function authenticateAdmin(svc: Services, req: IncomingMessage): Actor {
     if (key) return { id: key.id, name: key.name, role: key.role, team: key.team };
   }
   const wait = svc.authFailures.take(`admin:${clientIp(req)}`, 10);
-  if (wait > 0) throw new HttpError(429, "too many failed attempts, try again later", "rate_limit_error", { "retry-after": String(wait) });
+  if (wait > 0)
+    throw new HttpError(429, "too many failed attempts, try again later", "rate_limit_error", {
+      "retry-after": String(wait),
+    });
   throw new HttpError(401, "invalid admin token", "authentication_error");
 }
 
@@ -54,7 +57,8 @@ function scopeTeam(ctx: Ctx): string | null {
 }
 
 function requireTeamAccess(actor: Actor, team: string): void {
-  if (actor.team !== null && actor.team !== team) throw new HttpError(403, "this is outside your team", "permission_error");
+  if (actor.team !== null && actor.team !== team)
+    throw new HttpError(403, "this is outside your team", "permission_error");
 }
 
 function requireAllTeams(actor: Actor): void {
@@ -71,7 +75,8 @@ function optionalNumber(value: unknown, field: string, { min = 0, integer = fals
 }
 
 function requireName(value: unknown, field = "name"): string {
-  if (typeof value !== "string" || value.trim() === "" || value.length > 100) throw new HttpError(400, `${field} must be a non-empty string of at most 100 characters`);
+  if (typeof value !== "string" || value.trim() === "" || value.length > 100)
+    throw new HttpError(400, `${field} must be a non-empty string of at most 100 characters`);
   return value.trim();
 }
 
@@ -80,7 +85,8 @@ function parseAgentSettings(body: Body): AgentChanges {
   const out: AgentChanges = {};
   if (body.name !== undefined) out.name = requireName(body.name);
   if (body.team !== undefined) {
-    if (!isTeamSlug(body.team)) throw new HttpError(400, "team must be lowercase letters, digits and dashes, up to 40 characters");
+    if (!isTeamSlug(body.team))
+      throw new HttpError(400, "team must be lowercase letters, digits and dashes, up to 40 characters");
     out.team = body.team;
   }
   if (body.disabled !== undefined) {
@@ -89,7 +95,12 @@ function parseAgentSettings(body: Body): AgentChanges {
   }
   if (body.allowedModels !== undefined) {
     const list = body.allowedModels;
-    if (list !== null && (!Array.isArray(list) || list.length > 100 || list.some((m: unknown) => typeof m !== "string" || m === "" || m.length > 200))) {
+    if (
+      list !== null &&
+      (!Array.isArray(list) ||
+        list.length > 100 ||
+        list.some((m: unknown) => typeof m !== "string" || m === "" || m.length > 200))
+    ) {
       throw new HttpError(400, "allowedModels must be a list of model names, or null");
     }
     out.allowedModels = list;
@@ -107,24 +118,31 @@ const OUTCOME_FILTER = /^[a-z_]{1,30}$/;
 
 const routes: Route[] = [
   {
-    method: "GET", pattern: /^\/admin\/me$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/admin\/me$/,
+    role: "viewer",
     handler: (c) => json(c, 200, { actor: c.actor }),
   },
 
   // Teams
   {
-    method: "GET", pattern: /^\/admin\/teams$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/admin\/teams$/,
+    role: "viewer",
     handler: (c) => {
       const teams = c.svc.teams.list().filter((t) => c.actor.team === null || t.id === c.actor.team);
       json(c, 200, { teams: teams.map((t) => ({ ...t, hasOwnPolicy: c.svc.policies.getTeam(t.id) !== undefined })) });
     },
   },
   {
-    method: "POST", pattern: /^\/admin\/teams$/, role: "owner",
+    method: "POST",
+    pattern: /^\/admin\/teams$/,
+    role: "owner",
     handler: async (c) => {
       requireAllTeams(c.actor);
       const body = await c.body();
-      if (!isTeamSlug(body.id)) throw new HttpError(400, "id must be lowercase letters, digits and dashes, up to 40 characters");
+      if (!isTeamSlug(body.id))
+        throw new HttpError(400, "id must be lowercase letters, digits and dashes, up to 40 characters");
       if (c.svc.teams.get(body.id)) throw new HttpError(409, "a team with this id already exists");
       const team = c.svc.teams.ensure(body.id, body.name === undefined ? body.id : requireName(body.name));
       c.svc.audit.append("team.created", label(c.actor), { teamId: team.id });
@@ -132,7 +150,9 @@ const routes: Route[] = [
     },
   },
   {
-    method: "PATCH", pattern: /^\/admin\/teams\/([a-z0-9-]+)$/, role: "owner",
+    method: "PATCH",
+    pattern: /^\/admin\/teams\/([a-z0-9-]+)$/,
+    role: "owner",
     handler: async (c) => {
       requireAllTeams(c.actor);
       const team = c.svc.teams.rename(c.params[0]!, requireName((await c.body()).name));
@@ -144,14 +164,18 @@ const routes: Route[] = [
 
   // Admin users
   {
-    method: "GET", pattern: /^\/admin\/users$/, role: "owner",
+    method: "GET",
+    pattern: /^\/admin\/users$/,
+    role: "owner",
     handler: (c) => {
       requireAllTeams(c.actor);
       json(c, 200, { users: c.svc.adminKeys.list() });
     },
   },
   {
-    method: "POST", pattern: /^\/admin\/users$/, role: "owner",
+    method: "POST",
+    pattern: /^\/admin\/users$/,
+    role: "owner",
     handler: async (c) => {
       requireAllTeams(c.actor);
       const body = await c.body();
@@ -166,7 +190,9 @@ const routes: Route[] = [
     },
   },
   {
-    method: "PATCH", pattern: /^\/admin\/users\/([\w-]+)$/, role: "owner",
+    method: "PATCH",
+    pattern: /^\/admin\/users\/([\w-]+)$/,
+    role: "owner",
     handler: async (c) => {
       requireAllTeams(c.actor);
       const body = await c.body();
@@ -180,14 +206,20 @@ const routes: Route[] = [
 
   // Agents
   {
-    method: "GET", pattern: /^\/admin\/agents$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/admin\/agents$/,
+    role: "viewer",
     handler: (c) => {
-      const agents = c.svc.agents.list(scopeTeam(c)).map((a) => ({ ...a, spentThisMonthUsd: c.svc.requests.spendThisMonth(a.id) }));
+      const agents = c.svc.agents
+        .list(scopeTeam(c))
+        .map((a) => ({ ...a, spentThisMonthUsd: c.svc.requests.spendThisMonth(a.id) }));
       json(c, 200, { agents });
     },
   },
   {
-    method: "POST", pattern: /^\/admin\/agents$/, role: "admin",
+    method: "POST",
+    pattern: /^\/admin\/agents$/,
+    role: "admin",
     handler: async (c) => {
       const body = await c.body();
       const name = requireName(body.name);
@@ -195,13 +227,22 @@ const routes: Route[] = [
       const team = settings.team ?? c.actor.team ?? "default";
       requireTeamAccess(c.actor, team);
       c.svc.teams.ensure(team);
-      const { agent, key } = c.svc.agents.create({ name, team, allowedModels: settings.allowedModels, monthlyBudgetUsd: settings.monthlyBudgetUsd, ratePerMinute: settings.ratePerMinute, maxConcurrent: settings.maxConcurrent });
+      const { agent, key } = c.svc.agents.create({
+        name,
+        team,
+        allowedModels: settings.allowedModels,
+        monthlyBudgetUsd: settings.monthlyBudgetUsd,
+        ratePerMinute: settings.ratePerMinute,
+        maxConcurrent: settings.maxConcurrent,
+      });
       c.svc.audit.append("agent.created", label(c.actor), { agentId: agent.id, name: agent.name, team: agent.team });
       json(c, 201, { agent, key });
     },
   },
   {
-    method: "PATCH", pattern: /^\/admin\/agents\/([\w-]+)$/, role: "admin",
+    method: "PATCH",
+    pattern: /^\/admin\/agents\/([\w-]+)$/,
+    role: "admin",
     handler: async (c) => {
       const current = c.svc.agents.get(c.params[0]!);
       if (!current) throw new HttpError(404, "agent not found");
@@ -217,7 +258,9 @@ const routes: Route[] = [
     },
   },
   {
-    method: "POST", pattern: /^\/admin\/agents\/([\w-]+)\/rotate-key$/, role: "admin",
+    method: "POST",
+    pattern: /^\/admin\/agents\/([\w-]+)\/rotate-key$/,
+    role: "admin",
     handler: (c) => {
       const current = c.svc.agents.get(c.params[0]!);
       if (!current) throw new HttpError(404, "agent not found");
@@ -230,7 +273,9 @@ const routes: Route[] = [
 
   // Policy
   {
-    method: "GET", pattern: /^\/admin\/policy$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/admin\/policy$/,
+    role: "viewer",
     handler: (c) => {
       const team = c.url.searchParams.get("team");
       if (team === null) {
@@ -244,13 +289,16 @@ const routes: Route[] = [
     },
   },
   {
-    method: "PUT", pattern: /^\/admin\/policy$/, role: "admin",
+    method: "PUT",
+    pattern: /^\/admin\/policy$/,
+    role: "admin",
     handler: async (c) => {
       const team = c.url.searchParams.get("team");
       const body = await c.body();
       try {
         if (team === null) {
-          if (c.actor.role !== "owner") throw new HttpError(403, "only an owner can change the organization policy", "permission_error");
+          if (c.actor.role !== "owner")
+            throw new HttpError(403, "only an owner can change the organization policy", "permission_error");
           requireAllTeams(c.actor);
           const policy = c.svc.policies.set(body);
           c.svc.audit.append("policy.updated", label(c.actor), { scope: "organization", policy });
@@ -269,7 +317,9 @@ const routes: Route[] = [
     },
   },
   {
-    method: "DELETE", pattern: /^\/admin\/policy$/, role: "admin",
+    method: "DELETE",
+    pattern: /^\/admin\/policy$/,
+    role: "admin",
     handler: (c) => {
       const team = c.url.searchParams.get("team");
       if (team === null || !isTeamSlug(team)) throw new HttpError(400, "pass ?team=<id> to remove a team policy");
@@ -280,7 +330,9 @@ const routes: Route[] = [
     },
   },
   {
-    method: "POST", pattern: /^\/admin\/policy\/simulate$/, role: "viewer",
+    method: "POST",
+    pattern: /^\/admin\/policy\/simulate$/,
+    role: "viewer",
     handler: async (c) => {
       const body = await c.body();
       let policy: Policy;
@@ -295,7 +347,8 @@ const routes: Route[] = [
       const out: Record<string, unknown> = {};
       if (body.toolCall !== undefined) {
         const tc = body.toolCall;
-        if (tc === null || typeof tc !== "object" || typeof tc.name !== "string" || tc.name === "") throw new HttpError(400, "toolCall.name is required");
+        if (tc === null || typeof tc !== "object" || typeof tc.name !== "string" || tc.name === "")
+          throw new HttpError(400, "toolCall.name is required");
         const { args, valid } = parseToolArguments(tc.args);
         const d = decideToolCall(policy, { name: tc.name, args, argsValid: valid });
         out.tool = { action: d.action, reason: d.reason, ruleIndex: d.ruleIndex, argumentsValid: valid };
@@ -306,7 +359,12 @@ const routes: Route[] = [
           out.redaction = { mode: "off", text: body.text, findings: [], wouldBlock: false };
         } else {
           const r = redactText(body.text, policy.redaction.detectors);
-          out.redaction = { mode: policy.redaction.mode, text: r.text, findings: r.findings, wouldBlock: policy.redaction.mode === "block" && r.findings.length > 0 };
+          out.redaction = {
+            mode: policy.redaction.mode,
+            text: r.text,
+            findings: r.findings,
+            wouldBlock: policy.redaction.mode === "block" && r.findings.length > 0,
+          };
         }
       }
       json(c, 200, out);
@@ -315,24 +373,37 @@ const routes: Route[] = [
 
   // Traffic
   {
-    method: "GET", pattern: /^\/admin\/requests$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/admin\/requests$/,
+    role: "viewer",
     handler: (c) => {
       const outcome = c.url.searchParams.get("outcome");
       if (outcome !== null && !OUTCOME_FILTER.test(outcome)) throw new HttpError(400, "invalid outcome filter");
       const agentId = c.url.searchParams.get("agent");
-      const requests = c.svc.requests.recent(clampLimit(c.url), scopeTeam(c), { outcome: outcome ?? undefined, agentId: agentId ?? undefined });
+      const requests = c.svc.requests.recent(clampLimit(c.url), scopeTeam(c), {
+        outcome: outcome ?? undefined,
+        agentId: agentId ?? undefined,
+      });
       json(c, 200, { requests });
     },
   },
   {
-    method: "GET", pattern: /^\/admin\/summary$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/admin\/summary$/,
+    role: "viewer",
     handler: (c) => {
       const team = scopeTeam(c);
-      json(c, 200, { summary: c.svc.requests.summary(team), pendingApprovals: c.svc.approvals.pendingCount(team), agents: c.svc.agents.list(team).length });
+      json(c, 200, {
+        summary: c.svc.requests.summary(team),
+        pendingApprovals: c.svc.approvals.pendingCount(team),
+        agents: c.svc.agents.list(team).length,
+      });
     },
   },
   {
-    method: "GET", pattern: /^\/admin\/timeseries$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/admin\/timeseries$/,
+    role: "viewer",
     handler: (c) => {
       const asked = Number(c.url.searchParams.get("hours") ?? 24);
       const hours = Math.min(Math.max(Number.isFinite(asked) ? Math.floor(asked) : 24, 1), 168);
@@ -340,10 +411,16 @@ const routes: Route[] = [
     },
   },
   {
-    method: "GET", pattern: /^\/metrics$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/metrics$/,
+    role: "viewer",
     handler: (c) => {
       const team = scopeTeam(c);
-      const text = renderMetrics(c.svc.requests.summary(team), c.svc.approvals.pendingCount(team), c.svc.agents.list(team).length);
+      const text = renderMetrics(
+        c.svc.requests.summary(team),
+        c.svc.approvals.pendingCount(team),
+        c.svc.agents.list(team).length,
+      );
       c.res.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
       c.res.end(text);
     },
@@ -351,15 +428,26 @@ const routes: Route[] = [
 
   // Approvals
   {
-    method: "GET", pattern: /^\/admin\/approvals$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/admin\/approvals$/,
+    role: "viewer",
     handler: (c) => {
       const status = c.url.searchParams.get("status");
-      if (status !== null && !["pending", "approved", "denied"].includes(status)) throw new HttpError(400, "status must be pending, approved or denied");
-      json(c, 200, { approvals: c.svc.approvals.list((status as "pending" | "approved" | "denied" | null) ?? undefined, clampLimit(c.url), scopeTeam(c)) });
+      if (status !== null && !["pending", "approved", "denied"].includes(status))
+        throw new HttpError(400, "status must be pending, approved or denied");
+      json(c, 200, {
+        approvals: c.svc.approvals.list(
+          (status as "pending" | "approved" | "denied" | null) ?? undefined,
+          clampLimit(c.url),
+          scopeTeam(c),
+        ),
+      });
     },
   },
   {
-    method: "POST", pattern: /^\/admin\/approvals\/([\w-]+)\/(approve|deny)$/, role: "approver",
+    method: "POST",
+    pattern: /^\/admin\/approvals\/([\w-]+)\/(approve|deny)$/,
+    role: "approver",
     handler: (c) => {
       const id = c.params[0]!;
       const approve = c.params[1] === "approve";
@@ -380,14 +468,18 @@ const routes: Route[] = [
 
   // Audit
   {
-    method: "GET", pattern: /^\/admin\/audit$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/admin\/audit$/,
+    role: "viewer",
     handler: (c) => {
       requireAllTeams(c.actor);
       json(c, 200, { events: c.svc.audit.recent(clampLimit(c.url)) });
     },
   },
   {
-    method: "GET", pattern: /^\/admin\/audit\/verify$/, role: "viewer",
+    method: "GET",
+    pattern: /^\/admin\/audit\/verify$/,
+    role: "viewer",
     handler: (c) => {
       requireAllTeams(c.actor);
       json(c, 200, c.svc.audit.verify());
@@ -396,20 +488,26 @@ const routes: Route[] = [
 
   // Upstreams
   {
-    method: "GET", pattern: /^\/admin\/upstreams$/, role: "admin",
+    method: "GET",
+    pattern: /^\/admin\/upstreams$/,
+    role: "admin",
     handler: (c) => {
       requireAllTeams(c.actor);
       json(c, 200, { upstreams: c.svc.upstreams.list(), fallback: c.svc.options.upstreamUrl });
     },
   },
   {
-    method: "POST", pattern: /^\/admin\/upstreams$/, role: "owner",
+    method: "POST",
+    pattern: /^\/admin\/upstreams$/,
+    role: "owner",
     handler: async (c) => {
       requireAllTeams(c.actor);
       const body = await c.body();
       const name = requireName(body.name);
-      if (!/^[\w.-]{1,60}$/.test(name)) throw new HttpError(400, "name may use letters, digits, dots, dashes and underscores");
-      if (!UPSTREAM_KINDS.includes(body.kind)) throw new HttpError(400, `kind must be one of: ${UPSTREAM_KINDS.join(", ")}`);
+      if (!/^[\w.-]{1,60}$/.test(name))
+        throw new HttpError(400, "name may use letters, digits, dots, dashes and underscores");
+      if (!UPSTREAM_KINDS.includes(body.kind))
+        throw new HttpError(400, `kind must be one of: ${UPSTREAM_KINDS.join(", ")}`);
       let baseUrl: string;
       try {
         baseUrl = validateUpstreamUrl(body.baseUrl);
@@ -420,29 +518,53 @@ const routes: Route[] = [
         throw new HttpError(400, "apiKeyEnv must be the name of an environment variable, such as ANTHROPIC_API_KEY");
       }
       const models = body.models;
-      if (!Array.isArray(models) || models.length === 0 || models.length > 50 || models.some((m: unknown) => typeof m !== "string" || m === "" || m.length > 200)) {
+      if (
+        !Array.isArray(models) ||
+        models.length === 0 ||
+        models.length > 50 ||
+        models.some((m: unknown) => typeof m !== "string" || m === "" || m.length > 200)
+      ) {
         throw new HttpError(400, "models must be a non-empty list of model name patterns, such as claude-*");
       }
-      if (c.svc.upstreams.list().some((u) => u.name === name)) throw new HttpError(409, "an upstream with this name already exists");
-      const upstream = c.svc.upstreams.create({ name, kind: body.kind as UpstreamKind, baseUrl, apiKeyEnv: body.apiKeyEnv ?? null, models });
-      c.svc.audit.append("upstream.created", label(c.actor), { upstreamId: upstream.id, name, kind: upstream.kind, baseUrl: upstream.baseUrl, models });
+      if (c.svc.upstreams.list().some((u) => u.name === name))
+        throw new HttpError(409, "an upstream with this name already exists");
+      const upstream = c.svc.upstreams.create({
+        name,
+        kind: body.kind as UpstreamKind,
+        baseUrl,
+        apiKeyEnv: body.apiKeyEnv ?? null,
+        models,
+      });
+      c.svc.audit.append("upstream.created", label(c.actor), {
+        upstreamId: upstream.id,
+        name,
+        kind: upstream.kind,
+        baseUrl: upstream.baseUrl,
+        models,
+      });
       json(c, 201, { upstream });
     },
   },
   {
-    method: "PATCH", pattern: /^\/admin\/upstreams\/(\d+)$/, role: "owner",
+    method: "PATCH",
+    pattern: /^\/admin\/upstreams\/(\d+)$/,
+    role: "owner",
     handler: async (c) => {
       requireAllTeams(c.actor);
       const body = await c.body();
       if (typeof body.enabled !== "boolean") throw new HttpError(400, "enabled must be a boolean");
       const upstream = c.svc.upstreams.setEnabled(Number(c.params[0]), body.enabled);
       if (!upstream) throw new HttpError(404, "upstream not found");
-      c.svc.audit.append(body.enabled ? "upstream.enabled" : "upstream.disabled", label(c.actor), { upstreamId: upstream.id });
+      c.svc.audit.append(body.enabled ? "upstream.enabled" : "upstream.disabled", label(c.actor), {
+        upstreamId: upstream.id,
+      });
       json(c, 200, { upstream });
     },
   },
   {
-    method: "DELETE", pattern: /^\/admin\/upstreams\/(\d+)$/, role: "owner",
+    method: "DELETE",
+    pattern: /^\/admin\/upstreams\/(\d+)$/,
+    role: "owner",
     handler: (c) => {
       requireAllTeams(c.actor);
       if (!c.svc.upstreams.delete(Number(c.params[0]))) throw new HttpError(404, "upstream not found");
@@ -456,7 +578,12 @@ const routes: Route[] = [
  * Handles `/admin/*` and `/metrics`. Returns false when the path is not one of them, so the caller can move on.
  * Roles and team limits are checked here, once, before any handler runs.
  */
-export async function handleAdmin(svc: Services, req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
+export async function handleAdmin(
+  svc: Services,
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<boolean> {
   const path = url.pathname;
   if (!path.startsWith("/admin/") && path !== "/metrics") return false;
 
@@ -473,7 +600,12 @@ export async function handleAdmin(svc: Services, req: IncomingMessage, res: Serv
     }
     let cached: Promise<Body> | undefined;
     const ctx: Ctx = {
-      svc, req, res, url, actor, params: match.slice(1),
+      svc,
+      req,
+      res,
+      url,
+      actor,
+      params: match.slice(1),
       body: () => (cached ??= readBody(req).then(parseJsonObject)),
     };
     await route.handler(ctx);

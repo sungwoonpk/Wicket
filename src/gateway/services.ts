@@ -34,7 +34,9 @@ export interface GatewayOptions {
 
 /** Everything a request handler needs, built once at start-up. */
 export interface Services {
-  options: Required<Pick<GatewayOptions, "upstreamUrl" | "adminToken" | "upstreamTimeoutMs" | "maxPendingApprovalsPerAgent">>;
+  options: Required<
+    Pick<GatewayOptions, "upstreamUrl" | "adminToken" | "upstreamTimeoutMs" | "maxPendingApprovalsPerAgent">
+  >;
   env: NodeJS.ProcessEnv;
   db: DatabaseSync;
   agents: AgentStore;
@@ -56,7 +58,8 @@ export interface Services {
 
 export function createServices(options: GatewayOptions): Services {
   const db = openDb(options.dbPath);
-  const auditKey = options.auditKey ?? createHmac("sha256", options.adminToken).update("wicket audit head").digest("hex");
+  const auditKey =
+    options.auditKey ?? createHmac("sha256", options.adminToken).update("wicket audit head").digest("hex");
   return {
     options: {
       upstreamUrl: options.upstreamUrl.replace(/\/+$/, ""),

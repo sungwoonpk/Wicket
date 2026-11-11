@@ -56,7 +56,8 @@ function evaluate(condition: Condition, call: ToolCall): Verdict {
       return safeRegexTest(String(condition.value), String(actual));
     case "gt":
     case "lt": {
-      const n = typeof actual === "number" ? actual : typeof actual === "string" && actual.trim() !== "" ? Number(actual) : NaN;
+      const n =
+        typeof actual === "number" ? actual : typeof actual === "string" && actual.trim() !== "" ? Number(actual) : NaN;
       if (!Number.isFinite(n)) return "unknown";
       return condition.op === "gt" ? n > Number(condition.value) : n < Number(condition.value);
     }
@@ -93,14 +94,12 @@ const SEVERITY: Record<ToolAction, number> = { allow: 0, require_approval: 1, de
 
 /** The strictest decision wins: any deny blocks the whole response, otherwise any approval holds it. */
 export function overallAction(decisions: ToolDecision[]): ToolAction {
-  return decisions.reduce<ToolAction>(
-    (worst, d) => (SEVERITY[d.action] > SEVERITY[worst] ? d.action : worst),
-    "allow",
-  );
+  return decisions.reduce<ToolAction>((worst, d) => (SEVERITY[d.action] > SEVERITY[worst] ? d.action : worst), "allow");
 }
 
 export function parseToolArguments(raw: unknown): { args: Record<string, unknown>; valid: boolean } {
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) return { args: raw as Record<string, unknown>, valid: true };
+  if (raw && typeof raw === "object" && !Array.isArray(raw))
+    return { args: raw as Record<string, unknown>, valid: true };
   if (raw === undefined || raw === null || raw === "") return { args: {}, valid: true };
   if (typeof raw !== "string") return { args: {}, valid: false };
   try {

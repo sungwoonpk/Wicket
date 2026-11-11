@@ -10,13 +10,13 @@ A gateway that sits between AI agents and LLM providers. Every agent gets its ow
 
 Agents act through tools, and most teams have no control point in front of them. Surveys of teams building with agents in 2026 keep landing on the same gaps: security and governance rank as the top pain, few organizations monitor agent traffic end to end, and cost is hard to see. Wicket is one place to close those.
 
-| What goes wrong | What Wicket does |
-| --- | --- |
-| One shared API key, no idea which agent did what | A key per agent, every request logged against it |
-| Customer data ends up in a prompt | Emails, SSNs, card numbers, phone numbers and API keys are masked, or the request is blocked |
-| An agent calls `delete_customer` or issues a $2,400 refund | Rules deny the call, or hold it until a person approves |
-| A loop burns the month's budget overnight | Monthly budget per agent, per-minute rate limit, model allow list |
-| "What did the agent do?" has no trustworthy answer | Hash-chained audit trail, verified on demand |
+| What goes wrong                                            | What Wicket does                                                                             |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| One shared API key, no idea which agent did what           | A key per agent, every request logged against it                                             |
+| Customer data ends up in a prompt                          | Emails, SSNs, card numbers, phone numbers and API keys are masked, or the request is blocked |
+| An agent calls `delete_customer` or issues a $2,400 refund | Rules deny the call, or hold it until a person approves                                      |
+| A loop burns the month's budget overnight                  | Monthly budget per agent, per-minute rate limit, model allow list                            |
+| "What did the agent do?" has no trustworthy answer         | Hash-chained audit trail, verified on demand                                                 |
 
 ## What it does
 
@@ -75,13 +75,13 @@ To use a real model instead of the mock, set `WICKET_UPSTREAM_URL` to any OpenAI
 
 ### Configuration
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `WICKET_ADMIN_TOKEN` | required | Bearer token for `/admin` routes and `/metrics` |
-| `WICKET_UPSTREAM_URL` | `http://localhost:4010` | OpenAI-compatible upstream |
-| `WICKET_DB` | `wicket.db` | SQLite file. `:memory:` for a throwaway database |
-| `PORT` | `8080` | Gateway port |
-| `MOCK_PORT`, `MOCK_LATENCY_MS` | `4010`, `0` | Mock upstream port and added latency |
+| Variable                       | Default                 | Meaning                                          |
+| ------------------------------ | ----------------------- | ------------------------------------------------ |
+| `WICKET_ADMIN_TOKEN`           | required                | Bearer token for `/admin` routes and `/metrics`  |
+| `WICKET_UPSTREAM_URL`          | `http://localhost:4010` | OpenAI-compatible upstream                       |
+| `WICKET_DB`                    | `wicket.db`             | SQLite file. `:memory:` for a throwaway database |
+| `PORT`                         | `8080`                  | Gateway port                                     |
+| `MOCK_PORT`, `MOCK_LATENCY_MS` | `4010`, `0`             | Mock upstream port and added latency             |
 
 ## A policy
 
@@ -91,12 +91,18 @@ To use a real model instead of the mock, set `WICKET_UPSTREAM_URL` to any OpenAI
   "defaultToolAction": "allow",
   "tools": [
     { "tool": "delete_*", "action": "deny", "reason": "destructive tools are never allowed" },
-    { "tool": "refund", "action": "require_approval",
+    {
+      "tool": "refund",
+      "action": "require_approval",
       "when": [{ "arg": "amount", "op": "gt", "value": 100 }],
-      "reason": "refunds over $100 need a human" },
-    { "tool": "http_request", "action": "deny",
+      "reason": "refunds over $100 need a human"
+    },
+    {
+      "tool": "http_request",
+      "action": "deny",
       "when": [{ "arg": "url", "op": "matches", "value": "^https?://(?!(api\\.)?acme\\.com)" }],
-      "reason": "outbound requests are limited to acme.com" }
+      "reason": "outbound requests are limited to acme.com"
+    }
   ]
 }
 ```
@@ -106,9 +112,13 @@ Load it with `PUT /admin/policy`. Rules run in order and the first match wins. C
 When a call needs approval the agent gets `202` and a `poll_url`:
 
 ```json
-{ "object": "wicket.approval_required", "approval_id": "apr_...", "status": "pending",
+{
+  "object": "wicket.approval_required",
+  "approval_id": "apr_...",
+  "status": "pending",
   "tool_calls": [{ "name": "refund", "args": { "amount": 850 }, "reason": "refunds over $100 need a human" }],
-  "poll_url": "/v1/approvals/apr_..." }
+  "poll_url": "/v1/approvals/apr_..."
+}
 ```
 
 Polling returns `202` while pending, then the original response (`200`) once approved, or `403` if denied.
@@ -117,20 +127,20 @@ Polling returns `202` while pending, then the original response (`200`) once app
 
 Agent routes use the agent's key. Admin routes and `/metrics` use the admin token.
 
-| Route | What it does |
-| --- | --- |
-| `POST /v1/chat/completions` | OpenAI-compatible completion, streamed or not |
-| `GET /v1/approvals/:id` | Agent polls a held tool call |
-| `POST /admin/agents` | Create an agent and return its key once |
-| `GET /admin/agents` | List agents with spend this month |
-| `PATCH /admin/agents/:id` | Change name, team, models, budget, rate limit, or disable |
-| `GET`, `PUT /admin/policy` | Read or replace the policy |
-| `GET /admin/requests` | Recent requests with outcome, tokens, cost, latency |
-| `GET /admin/summary` | Totals for the dashboard |
-| `GET /admin/approvals`, `POST /admin/approvals/:id/approve` or `deny` | Review the queue |
-| `GET /admin/audit`, `GET /admin/audit/verify` | Read the trail, check the chain |
-| `GET /metrics` | Prometheus text format |
-| `GET /dashboard`, `GET /healthz` | Admin page, health check |
+| Route                                                                 | What it does                                              |
+| --------------------------------------------------------------------- | --------------------------------------------------------- |
+| `POST /v1/chat/completions`                                           | OpenAI-compatible completion, streamed or not             |
+| `GET /v1/approvals/:id`                                               | Agent polls a held tool call                              |
+| `POST /admin/agents`                                                  | Create an agent and return its key once                   |
+| `GET /admin/agents`                                                   | List agents with spend this month                         |
+| `PATCH /admin/agents/:id`                                             | Change name, team, models, budget, rate limit, or disable |
+| `GET`, `PUT /admin/policy`                                            | Read or replace the policy                                |
+| `GET /admin/requests`                                                 | Recent requests with outcome, tokens, cost, latency       |
+| `GET /admin/summary`                                                  | Totals for the dashboard                                  |
+| `GET /admin/approvals`, `POST /admin/approvals/:id/approve` or `deny` | Review the queue                                          |
+| `GET /admin/audit`, `GET /admin/audit/verify`                         | Read the trail, check the chain                           |
+| `GET /metrics`                                                        | Prometheus text format                                    |
+| `GET /dashboard`, `GET /healthz`                                      | Admin page, health check                                  |
 
 ## How a request flows
 
@@ -155,18 +165,18 @@ Measured with `npm run bench`: the mock upstream, the gateway and the load clien
 
 Unloaded (concurrency 1), latency added to a request:
 
-| Scenario | p50 | p95 | p99 |
-| --- | --- | --- | --- |
-| Gateway, no policy | 0.21 ms | 0.27 ms | 0.81 ms |
+| Scenario                          | p50     | p95     | p99     |
+| --------------------------------- | ------- | ------- | ------- |
+| Gateway, no policy                | 0.21 ms | 0.27 ms | 0.81 ms |
 | Gateway, redaction and tool rules | 0.28 ms | 0.34 ms | 0.66 ms |
 
 Saturated (concurrency 32), one gateway process:
 
-| Scenario | p50 | p99 | Throughput |
-| --- | --- | --- | --- |
-| Direct to upstream | 2.65 ms | 7.03 ms | 11,300 req/s |
-| Gateway, no policy | 9.56 ms | 13.69 ms | 3,300 req/s |
-| Gateway, redaction and tool rules | 16.74 ms | 22.05 ms | 1,900 req/s |
+| Scenario                          | p50      | p99      | Throughput   |
+| --------------------------------- | -------- | -------- | ------------ |
+| Direct to upstream                | 2.65 ms  | 7.03 ms  | 11,300 req/s |
+| Gateway, no policy                | 9.56 ms  | 13.69 ms | 3,300 req/s  |
+| Gateway, redaction and tool rules | 16.74 ms | 22.05 ms | 1,900 req/s  |
 
 Under saturation the added latency is mostly queueing: one Node process handles about 3,000 requests a second here, and the redaction scenario also writes an audit event for every request because the test prompt contains an email address. Scale out with more processes behind a load balancer. Note that rate-limit state is per process (see Limits).
 

@@ -16,9 +16,18 @@ export class HttpError extends Error {
   }
 }
 
-export function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+export function sendJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): void {
   const payload = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(payload), ...headers });
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(payload),
+    ...headers,
+  });
   res.end(payload);
 }
 
@@ -58,7 +67,8 @@ export function parseJsonObject(raw: Buffer): Record<string, any> {
   } catch {
     throw new HttpError(400, "invalid JSON body");
   }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "the request body must be a JSON object");
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new HttpError(400, "the request body must be a JSON object");
   return value as Record<string, any>;
 }
 

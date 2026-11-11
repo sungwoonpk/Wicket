@@ -5,7 +5,9 @@ import { ADMIN, harness, listen, type Harness } from "./helpers.js";
 
 describe("proxy basics", () => {
   let h: Harness;
-  before(async () => { h = await harness(); });
+  before(async () => {
+    h = await harness();
+  });
   after(() => h.close());
 
   it("reports health", async () => {
@@ -78,7 +80,9 @@ describe("proxy basics", () => {
 
 describe("admin API", () => {
   let h: Harness;
-  before(async () => { h = await harness(); });
+  before(async () => {
+    h = await harness();
+  });
   after(() => h.close());
 
   it("requires the admin token everywhere", async () => {
@@ -110,7 +114,10 @@ describe("admin API", () => {
 
   it("validates and stores the policy", async () => {
     assert.equal((await h.admin("/admin/policy", "PUT", { tools: [{ tool: "x", action: "explode" }] })).status, 400);
-    const ok = await h.admin("/admin/policy", "PUT", { redaction: { mode: "redact" }, tools: [{ tool: "x", action: "deny" }] });
+    const ok = await h.admin("/admin/policy", "PUT", {
+      redaction: { mode: "redact" },
+      tools: [{ tool: "x", action: "deny" }],
+    });
     assert.equal(ok.status, 200);
     assert.equal((await h.admin("/admin/policy")).json.policy.redaction.mode, "redact");
   });
@@ -126,7 +133,13 @@ describe("admin API", () => {
     assert.equal(page.status, 200);
     assert.match(page.headers.get("content-type")!, /text\/html/);
     const csp = page.headers.get("content-security-policy")!;
-    for (const directive of ["default-src 'none'", "script-src 'self'", "style-src 'self'", "frame-ancestors 'none'", "connect-src 'self'"]) {
+    for (const directive of [
+      "default-src 'none'",
+      "script-src 'self'",
+      "style-src 'self'",
+      "frame-ancestors 'none'",
+      "connect-src 'self'",
+    ]) {
       assert.ok(csp.includes(directive), `missing ${directive}`);
     }
     assert.ok(!csp.includes("unsafe-inline") && !csp.includes("unsafe-eval"));
@@ -140,7 +153,9 @@ describe("admin API", () => {
 
 describe("access controls", () => {
   let h: Harness;
-  before(async () => { h = await harness(); });
+  before(async () => {
+    h = await harness();
+  });
   after(() => h.close());
 
   it("denies models that are not on the agent's allow list", async () => {
@@ -178,7 +193,12 @@ describe("policy enforcement", () => {
       defaultToolAction: "allow",
       tools: [
         { tool: "delete_*", action: "deny", reason: "destructive" },
-        { tool: "refund", action: "require_approval", when: [{ arg: "amount", op: "gt", value: 100 }], reason: "large refund" },
+        {
+          tool: "refund",
+          action: "require_approval",
+          when: [{ arg: "amount", op: "gt", value: 100 }],
+          reason: "large refund",
+        },
       ],
     });
   });
@@ -202,14 +222,19 @@ describe("policy enforcement", () => {
       redaction: { mode: "redact", detectors: ["email", "ssn"] },
       tools: [
         { tool: "delete_*", action: "deny", reason: "destructive" },
-        { tool: "refund", action: "require_approval", when: [{ arg: "amount", op: "gt", value: 100 }], reason: "large refund" },
+        {
+          tool: "refund",
+          action: "require_approval",
+          when: [{ arg: "amount", op: "gt", value: 100 }],
+          reason: "large refund",
+        },
       ],
     });
   });
 
   it("denies a destructive tool call and does not return it", async () => {
     const key = await h.newAgent();
-    const res = await h.chat(key, "[[tool:delete_customer {\"id\":7}]]");
+    const res = await h.chat(key, '[[tool:delete_customer {"id":7}]]');
     assert.equal(res.status, 403);
     const body = (await res.json()) as any;
     assert.equal(body.error.type, "policy_violation");
@@ -254,7 +279,7 @@ describe("policy enforcement", () => {
   it("keeps a denied approval blocked and hides approvals from other agents", async () => {
     const key = await h.newAgent();
     const other = await h.newAgent();
-    const id = (((await (await h.chat(key, '[[tool:refund {"amount":900}]]')).json()) as any).approval_id) as string;
+    const id = ((await (await h.chat(key, '[[tool:refund {"amount":900}]]')).json()) as any).approval_id as string;
     await h.admin(`/admin/approvals/${id}/deny`, "POST");
     const denied = await fetch(`${h.base}/v1/approvals/${id}`, { headers: { authorization: `Bearer ${key}` } });
     assert.equal(denied.status, 403);
@@ -275,7 +300,15 @@ describe("policy enforcement", () => {
     assert.equal(verify.ok, true);
     assert.ok(verify.checked > 5);
     const types = new Set((await h.admin("/admin/audit?limit=200")).json.events.map((e: any) => e.type));
-    for (const t of ["agent.created", "policy.updated", "request.redacted", "tool.denied", "approval.requested", "approval.approved", "approval.denied"]) {
+    for (const t of [
+      "agent.created",
+      "policy.updated",
+      "request.redacted",
+      "tool.denied",
+      "approval.requested",
+      "approval.approved",
+      "approval.denied",
+    ]) {
       assert.ok(types.has(t), `missing ${t}`);
     }
   });
@@ -290,7 +323,10 @@ describe("policy enforcement", () => {
 
 describe("extractUsage", () => {
   it("reads usage from a JSON body", () => {
-    assert.deepEqual(extractUsage('{"usage":{"prompt_tokens":3,"completion_tokens":5}}', false), { promptTokens: 3, completionTokens: 5 });
+    assert.deepEqual(extractUsage('{"usage":{"prompt_tokens":3,"completion_tokens":5}}', false), {
+      promptTokens: 3,
+      completionTokens: 5,
+    });
   });
 
   it("reads usage from the last SSE event that has it", () => {

@@ -39,7 +39,12 @@ describe("roles and team scope", () => {
   after(() => h.close());
 
   it("reports who is calling", async () => {
-    assert.deepEqual((await h.admin("/admin/me")).json.actor, { id: "bootstrap", name: "bootstrap", role: "owner", team: null });
+    assert.deepEqual((await h.admin("/admin/me")).json.actor, {
+      id: "bootstrap",
+      name: "bootstrap",
+      role: "owner",
+      team: null,
+    });
     const me = (await h.admin("/admin/me", "GET", undefined, supportAdmin)).json.actor;
     assert.equal(me.role, "admin");
     assert.equal(me.team, "support");
@@ -58,25 +63,55 @@ describe("roles and team scope", () => {
     await h.admin("/admin/policy", "PUT", { tools: [{ tool: "refund", action: "require_approval" }] });
     const held = (await (await h.chat(supportKey, '[[tool:refund {"amount":500}]]')).json()) as any;
     assert.equal((await h.admin("/admin/agents", "POST", { name: "x" }, approver)).status, 403);
-    assert.equal((await h.admin(`/admin/approvals/${held.approval_id}/approve`, "POST", undefined, viewer)).status, 403);
-    assert.equal((await h.admin(`/admin/approvals/${held.approval_id}/approve`, "POST", undefined, approver)).status, 200);
+    assert.equal(
+      (await h.admin(`/admin/approvals/${held.approval_id}/approve`, "POST", undefined, viewer)).status,
+      403,
+    );
+    assert.equal(
+      (await h.admin(`/admin/approvals/${held.approval_id}/approve`, "POST", undefined, approver)).status,
+      200,
+    );
     await h.admin("/admin/policy", "PUT", {});
   });
 
   it("lets an admin manage agents and team policy but not the organization", async () => {
-    assert.equal((await h.admin("/admin/agents", "POST", { name: "made-by-admin", team: "finance" }, admin)).status, 201);
-    assert.equal((await h.admin("/admin/policy", "PUT", {}, admin)).status, 403, "only an owner changes the organization policy");
+    assert.equal(
+      (await h.admin("/admin/agents", "POST", { name: "made-by-admin", team: "finance" }, admin)).status,
+      201,
+    );
+    assert.equal(
+      (await h.admin("/admin/policy", "PUT", {}, admin)).status,
+      403,
+      "only an owner changes the organization policy",
+    );
     assert.equal((await h.admin("/admin/policy?team=finance", "PUT", { tools: [] }, admin)).status, 200);
     assert.equal((await h.admin("/admin/users", "POST", { name: "x", role: "viewer" }, admin)).status, 403);
     assert.equal((await h.admin("/admin/upstreams", "POST", {}, admin)).status, 403);
   });
 
   it("limits a team-scoped admin to its own team", async () => {
-    assert.equal((await h.admin("/admin/agents", "POST", { name: "mine" }, supportAdmin)).json.agent.team, "support", "defaults to its own team");
-    assert.equal((await h.admin("/admin/agents", "POST", { name: "theirs", team: "finance" }, supportAdmin)).status, 403);
-    assert.equal((await h.admin(`/admin/agents/${financeAgentId}`, "PATCH", { disabled: true }, supportAdmin)).status, 403);
-    assert.equal((await h.admin(`/admin/agents/${financeAgentId}/rotate-key`, "POST", undefined, supportAdmin)).status, 403);
-    assert.equal((await h.admin(`/admin/agents/${supportAgentId}`, "PATCH", { team: "finance" }, supportAdmin)).status, 403, "cannot move an agent out of the team");
+    assert.equal(
+      (await h.admin("/admin/agents", "POST", { name: "mine" }, supportAdmin)).json.agent.team,
+      "support",
+      "defaults to its own team",
+    );
+    assert.equal(
+      (await h.admin("/admin/agents", "POST", { name: "theirs", team: "finance" }, supportAdmin)).status,
+      403,
+    );
+    assert.equal(
+      (await h.admin(`/admin/agents/${financeAgentId}`, "PATCH", { disabled: true }, supportAdmin)).status,
+      403,
+    );
+    assert.equal(
+      (await h.admin(`/admin/agents/${financeAgentId}/rotate-key`, "POST", undefined, supportAdmin)).status,
+      403,
+    );
+    assert.equal(
+      (await h.admin(`/admin/agents/${supportAgentId}`, "PATCH", { team: "finance" }, supportAdmin)).status,
+      403,
+      "cannot move an agent out of the team",
+    );
     assert.equal((await h.admin("/admin/policy?team=finance", "PUT", {}, supportAdmin)).status, 403);
     assert.equal((await h.admin("/admin/policy?team=support", "PUT", {}, supportAdmin)).status, 200);
     assert.equal((await h.admin("/admin/policy", "PUT", {}, supportAdmin)).status, 403);
@@ -91,9 +126,15 @@ describe("roles and team scope", () => {
     const scoped = (await h.admin("/admin/summary", "GET", undefined, supportViewer)).json.summary.requests;
     assert.ok(scoped < all);
     const teams = (await h.admin("/admin/teams", "GET", undefined, supportViewer)).json.teams;
-    assert.deepEqual(teams.map((t: any) => t.id), ["support"]);
+    assert.deepEqual(
+      teams.map((t: any) => t.id),
+      ["support"],
+    );
     const series = (await h.admin("/admin/timeseries?hours=2", "GET", undefined, supportViewer)).json.buckets;
-    assert.equal(series.reduce((n: number, b: any) => n + b.total, 0), scoped);
+    assert.equal(
+      series.reduce((n: number, b: any) => n + b.total, 0),
+      scoped,
+    );
     assert.ok(!(await h.admin("/metrics", "GET", undefined, supportViewer)).json.includes("wicket_agents 0"));
   });
 
@@ -101,7 +142,10 @@ describe("roles and team scope", () => {
     const financeOnly = (await h.admin("/admin/agents?team=finance")).json.agents;
     assert.ok(financeOnly.length >= 1 && financeOnly.every((a: any) => a.team === "finance"));
     const stillSupport = (await h.admin("/admin/agents?team=finance", "GET", undefined, supportViewer)).json.agents;
-    assert.ok(stillSupport.every((a: any) => a.team === "support"), "a scoped user cannot widen its view");
+    assert.ok(
+      stillSupport.every((a: any) => a.team === "support"),
+      "a scoped user cannot widen its view",
+    );
   });
 
   it("keeps the audit trail away from team-scoped users", async () => {
@@ -119,7 +163,10 @@ describe("roles and team scope", () => {
     assert.ok(held.approval_id, "the call must be held for this test to mean anything");
     const pending = (await h.admin("/admin/approvals?status=pending", "GET", undefined, supportViewer)).json.approvals;
     assert.ok(!pending.some((a: any) => a.id === held.approval_id), "support cannot see finance's approval");
-    assert.equal((await h.admin(`/admin/approvals/${held.approval_id}/approve`, "POST", undefined, supportApprover)).status, 403);
+    assert.equal(
+      (await h.admin(`/admin/approvals/${held.approval_id}/approve`, "POST", undefined, supportApprover)).status,
+      403,
+    );
     assert.equal((await h.admin(`/admin/approvals/${held.approval_id}/deny`, "POST", undefined, owner)).status, 200);
     await h.admin("/admin/policy", "PUT", {});
   });
@@ -139,7 +186,10 @@ describe("roles and team scope", () => {
     assert.equal((await h.admin("/admin/users", "POST", { name: "x", role: "viewer", team: "Bad Team" })).status, 400);
     assert.equal((await h.admin("/admin/teams", "POST", { id: "Bad Id" })).status, 400);
     assert.equal((await h.admin("/admin/teams", "POST", { id: "support" })).status, 409);
-    assert.equal((await h.admin("/admin/teams/support", "PATCH", { name: "Customer Support" })).json.team.name, "Customer Support");
+    assert.equal(
+      (await h.admin("/admin/teams/support", "PATCH", { name: "Customer Support" })).json.team.name,
+      "Customer Support",
+    );
     assert.equal((await h.admin("/admin/teams/ghost", "PATCH", { name: "x" })).status, 404);
   });
 
@@ -180,14 +230,20 @@ describe("team policy", () => {
 
   it("lets a team override the organization policy and fall back when it is removed", async () => {
     await h.admin("/admin/policy", "PUT", { tools: [] });
-    await h.admin("/admin/policy?team=finance", "PUT", { tools: [{ tool: "delete_*", action: "deny", reason: "finance never deletes" }] });
+    await h.admin("/admin/policy?team=finance", "PUT", {
+      tools: [{ tool: "delete_*", action: "deny", reason: "finance never deletes" }],
+    });
     const finance = await h.newAgent({ team: "finance" });
     const support = await h.newAgent({ team: "support" });
 
     const blocked = await h.chat(finance, "[[tool:delete_row {}]]");
     assert.equal(blocked.status, 403);
     assert.match(((await blocked.json()) as any).error.message, /finance never deletes/);
-    assert.equal((await h.chat(support, "[[tool:delete_row {}]]")).status, 200, "other teams follow the organization policy");
+    assert.equal(
+      (await h.chat(support, "[[tool:delete_row {}]]")).status,
+      200,
+      "other teams follow the organization policy",
+    );
 
     assert.equal((await h.admin("/admin/policy?team=finance", "DELETE")).status, 200);
     assert.equal((await h.chat(finance, "[[tool:delete_row {}]]")).status, 200);
@@ -214,6 +270,10 @@ describe("team policy", () => {
     const support = await h.newAgent({ team: "support" });
     const finance = await h.newAgent({ team: "finance" });
     assert.equal((await h.chat(support, "mail ann@example.com")).status, 400, "support blocks");
-    assert.equal((await h.chat(finance, "mail ann@example.com")).status, 200, "finance follows the organization, which is off");
+    assert.equal(
+      (await h.chat(finance, "mail ann@example.com")).status,
+      200,
+      "finance follows the organization, which is off",
+    );
   });
 });

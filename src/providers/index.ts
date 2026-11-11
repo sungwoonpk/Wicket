@@ -1,5 +1,11 @@
 import type { Target } from "../gateway/upstreams.js";
-import { fromAnthropicError, fromAnthropicResponse, StreamTranslator, toAnthropicRequest, UnsupportedContentError } from "./anthropic.js";
+import {
+  fromAnthropicError,
+  fromAnthropicResponse,
+  StreamTranslator,
+  toAnthropicRequest,
+  UnsupportedContentError,
+} from "./anthropic.js";
 
 export interface UpstreamResponse {
   status: number;
@@ -20,7 +26,8 @@ async function* once(text: string): AsyncGenerator<string> {
 function providerKey(target: Target, env: NodeJS.ProcessEnv): string | undefined {
   if (!target.apiKeyEnv) return undefined;
   const key = env[target.apiKeyEnv];
-  if (!key) throw new UpstreamConfigError(`environment variable ${target.apiKeyEnv} is not set for upstream "${target.name}"`);
+  if (!key)
+    throw new UpstreamConfigError(`environment variable ${target.apiKeyEnv} is not set for upstream "${target.name}"`);
   return key;
 }
 
@@ -51,7 +58,11 @@ export async function callUpstream(
     if (target.kind === "anthropic") {
       res = await fetch(`${target.baseUrl}/v1/messages`, {
         method: "POST",
-        headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", ...(key ? { "x-api-key": key } : {}) },
+        headers: {
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+          ...(key ? { "x-api-key": key } : {}),
+        },
         body: JSON.stringify(toAnthropicRequest(body)),
         signal,
       });
@@ -85,12 +96,24 @@ export async function callUpstream(
     } catch {
       /* keep the generic message */
     }
-    return { status: res.status, contentType: "application/json", chunks: once(JSON.stringify(fromAnthropicError(parsed))) };
+    return {
+      status: res.status,
+      contentType: "application/json",
+      chunks: once(JSON.stringify(fromAnthropicError(parsed))),
+    };
   }
 
   if (stream && res.body) {
-    return { status: res.status, contentType: "text/event-stream", chunks: translated(res.body as unknown as AsyncIterable<Uint8Array>, model) };
+    return {
+      status: res.status,
+      contentType: "text/event-stream",
+      chunks: translated(res.body as unknown as AsyncIterable<Uint8Array>, model),
+    };
   }
   const json = JSON.parse(await res.text());
-  return { status: res.status, contentType: "application/json", chunks: once(JSON.stringify(fromAnthropicResponse(json, model))) };
+  return {
+    status: res.status,
+    contentType: "application/json",
+    chunks: once(JSON.stringify(fromAnthropicResponse(json, model))),
+  };
 }

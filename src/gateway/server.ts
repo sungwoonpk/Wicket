@@ -52,7 +52,12 @@ export function createGatewayApp(options: GatewayOptions): GatewayApp {
         return;
       }
       if (err instanceof HttpError) {
-        sendJson(res, err.status, { error: { message: err.message, type: err.type, request_id: requestId, ...err.extra } }, err.headers);
+        sendJson(
+          res,
+          err.status,
+          { error: { message: err.message, type: err.type, request_id: requestId, ...err.extra } },
+          err.headers,
+        );
       } else {
         svc.log({ event: "error", requestId, message: err instanceof Error ? err.message : String(err) });
         sendJson(res, 500, { error: { message: "internal error", type: "server_error", request_id: requestId } });

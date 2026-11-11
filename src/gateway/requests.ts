@@ -92,14 +92,26 @@ export class RequestStore {
       );
   }
 
-  recent(limit = 100, team: string | null = null, filter: { outcome?: string; agentId?: string } = {}): RequestRecord[] {
+  recent(
+    limit = 100,
+    team: string | null = null,
+    filter: { outcome?: string; agentId?: string } = {},
+  ): RequestRecord[] {
     return this.db
       .prepare(
         `SELECT r.*, a.name AS agent_name FROM requests r LEFT JOIN agents a ON a.id = r.agent_id
          WHERE (? IS NULL OR a.team = ?) AND (? IS NULL OR r.outcome = ?) AND (? IS NULL OR r.agent_id = ?)
          ORDER BY r.at DESC, r.id DESC LIMIT ?`,
       )
-      .all(team, team, filter.outcome ?? null, filter.outcome ?? null, filter.agentId ?? null, filter.agentId ?? null, limit)
+      .all(
+        team,
+        team,
+        filter.outcome ?? null,
+        filter.outcome ?? null,
+        filter.agentId ?? null,
+        filter.agentId ?? null,
+        limit,
+      )
       .map(fromRow);
   }
 

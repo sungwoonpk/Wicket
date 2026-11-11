@@ -68,7 +68,11 @@ async function run(name: string, url: string, headers: Record<string, string>, b
       if (n === WARMUP) started.at = performance.now();
       const t0 = performance.now();
       try {
-        const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body });
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...headers },
+          body,
+        });
         await res.arrayBuffer();
         if (res.status !== 200) errors++;
       } catch {
@@ -133,10 +137,14 @@ async function main(): Promise<void> {
 
   const base = results[0]!;
   const fmt = (n: number) => n.toFixed(2).padStart(7);
-  console.log(`\n${REQUESTS} requests per scenario, concurrency ${CONCURRENCY}, ${cpus()[0]?.model} (${cpus().length} cores), ${platform()}/${arch()}, node ${process.version}\n`);
+  console.log(
+    `\n${REQUESTS} requests per scenario, concurrency ${CONCURRENCY}, ${cpus()[0]?.model} (${cpus().length} cores), ${platform()}/${arch()}, node ${process.version}\n`,
+  );
   console.log("scenario                          p50 ms   p95 ms   p99 ms   req/s   errors");
   for (const r of results) {
-    console.log(`${r.name.padEnd(32)} ${fmt(r.p50)}  ${fmt(r.p95)}  ${fmt(r.p99)}  ${r.rps.toFixed(0).padStart(6)}  ${String(r.errors).padStart(6)}`);
+    console.log(
+      `${r.name.padEnd(32)} ${fmt(r.p50)}  ${fmt(r.p95)}  ${fmt(r.p99)}  ${r.rps.toFixed(0).padStart(6)}  ${String(r.errors).padStart(6)}`,
+    );
   }
   console.log("\noverhead versus direct (added latency)");
   console.log("scenario                          p50 ms   p95 ms   p99 ms");
