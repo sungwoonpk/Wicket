@@ -192,7 +192,7 @@ describe("admin API", () => {
     assert.equal(page.headers.get("x-content-type-options"), "nosniff");
     assert.match((await fetch(`${h.base}/dashboard/app.js`)).headers.get("content-type")!, /javascript/);
     assert.match((await fetch(`${h.base}/dashboard/app.css`)).headers.get("content-type")!, /css/);
-    assert.equal((await fetch(`${h.base}/dashboard/secret.js`)).status, 401, "unknown dashboard paths fall through to the admin check");
+    assert.equal((await fetch(`${h.base}/dashboard/secret.js`)).status, 404, "only the three known files are served");
   });
 });
 
