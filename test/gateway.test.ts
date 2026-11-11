@@ -1,65 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { createMockUpstream } from "../src/mock/server.js";
-import { createGateway, createGatewayApp, extractUsage, type GatewayApp } from "../src/gateway/server.js";
-
-const ADMIN = "test-admin-token";
-
-function listen(server: Server): Promise<string> {
-  return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)),
-  );
-}
-
-interface Harness {
-  base: string;
-  app: GatewayApp;
-  close(): void;
-  admin(path: string, method?: string, body?: unknown): Promise<{ status: number; json: any }>;
-  newAgent(settings?: Record<string, unknown>): Promise<string>;
-  chat(key: string | undefined, content: string, extra?: Record<string, unknown>): Promise<Response>;
-}
-
-async function harness(): Promise<Harness> {
-  const mock = createMockUpstream();
-  const upstreamUrl = await listen(mock);
-  const app = createGatewayApp({ upstreamUrl, adminToken: ADMIN });
-  const base = await listen(app.server);
-  let n = 0;
-  const h: Harness = {
-    base,
-    app,
-    close() {
-      mock.close();
-      app.server.close();
-    },
-    async admin(path, method = "GET", body) {
-      const res = await fetch(`${base}${path}`, {
-        method,
-        headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      const text = await res.text();
-      let json: any = text;
-      try { json = JSON.parse(text); } catch { /* plain text, such as /metrics */ }
-      return { status: res.status, json };
-    },
-    async newAgent(settings = {}) {
-      const { json } = await h.admin("/admin/agents", "POST", { name: `agent-${++n}`, ...settings });
-      return json.key as string;
-    },
-    chat(key, content, extra = {}) {
-      return fetch(`${base}/v1/chat/completions`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
-        body: JSON.stringify({ model: "demo-small", messages: [{ role: "user", content }], ...extra }),
-      });
-    },
-  };
-  return h;
-}
+import { createGateway, extractUsage } from "../src/gateway/server.js";
+import { ADMIN, harness, listen, type Harness } from "./helpers.js";
 
 describe("proxy basics", () => {
   let h: Harness;
