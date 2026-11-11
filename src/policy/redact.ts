@@ -38,10 +38,19 @@ const SPECS: Record<Detector, DetectorSpec> = {
 /** Order matters: more specific patterns run first so a card number is not read as a phone. */
 const ORDER: Detector[] = ["api_key", "email", "ssn", "credit_card", "phone"];
 
+// Characters that render as nothing. Putting them inside an address or number is the easy way to slip past a pattern.
+const INVISIBLE = /[\u00AD\u200B-\u200F\u2060\u2061-\u2064\uFEFF\u180E]/g;
+
+/** Folds look-alike forms (fullwidth digits, ligatures) and removes invisible characters before matching. */
+export function normalizeForScan(text: string): string {
+  return text.normalize("NFKC").replace(INVISIBLE, "");
+}
+
 export function redactText(text: string, detectors: Detector[]): { text: string; findings: Finding[] } {
   const active = ORDER.filter((d) => detectors.includes(d));
   const counts = new Map<Detector, number>();
-  let out = text;
+  // Scanning the normalized text means the output is normalized too, which is the safe direction.
+  let out = active.length > 0 ? normalizeForScan(text) : text;
   for (const type of active) {
     const spec = SPECS[type];
     out = out.replace(spec.pattern, (match) => {

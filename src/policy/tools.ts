@@ -1,50 +1,87 @@
+import { createContext, Script } from "node:vm";
 import type { Condition, Policy, ToolAction, ToolCall, ToolDecision, ToolRule } from "./types.js";
 
-function globToRegExp(glob: string): RegExp {
+/** Matches a name against a pattern where `*` is a wildcard. Case-insensitive, so `Delete_X` cannot dodge `delete_*`. */
+export function globToRegExp(glob: string): RegExp {
   const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-  return new RegExp(`^${escaped}$`);
+  return new RegExp(`^${escaped}$`, "i");
 }
+
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 function getPath(obj: unknown, path: string): unknown {
   let current: unknown = obj;
   for (const key of path.split(".")) {
-    if (current === null || typeof current !== "object") return undefined;
+    if (UNSAFE_KEYS.has(key)) return undefined;
+    if (current === null || typeof current !== "object" || !Object.hasOwn(current, key)) return undefined;
     current = (current as Record<string, unknown>)[key];
   }
   return current;
 }
 
-function holds(condition: Condition, args: Record<string, unknown>): boolean {
-  const actual = getPath(args, condition.arg);
-  if (actual === undefined) return false;
+// Regular expressions come from policy documents, so a careless pattern could freeze the gateway.
+// They run in a separate context with a hard time limit instead of on the main thread unchecked.
+const sandbox = createContext({ re: null as RegExp | null, input: "" });
+const runner = new Script("re.test(input)");
+const MAX_REGEX_INPUT = 2048;
+const REGEX_TIMEOUT_MS = 20;
+
+type Verdict = boolean | "unknown";
+
+function safeRegexTest(pattern: string, value: string): Verdict {
+  try {
+    const re = new RegExp(pattern);
+    (sandbox as any).re = re;
+    (sandbox as any).input = value.slice(0, MAX_REGEX_INPUT);
+    return runner.runInContext(sandbox, { timeout: REGEX_TIMEOUT_MS }) === true;
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Evaluates one condition. "unknown" means the data could not be judged: the argument is missing,
+ * it is not a number where one is needed, or a pattern timed out. Unknowns fail closed, see `ruleMatches`.
+ */
+function evaluate(condition: Condition, call: ToolCall): Verdict {
+  if (!call.argsValid) return "unknown";
+  const actual = getPath(call.args, condition.arg);
+  if (actual === undefined || actual === null) return "unknown";
   switch (condition.op) {
     case "equals":
       return String(actual) === String(condition.value);
     case "contains":
       return String(actual).includes(String(condition.value));
     case "matches":
-      try {
-        return new RegExp(String(condition.value)).test(String(actual));
-      } catch {
-        return false;
-      }
+      return safeRegexTest(String(condition.value), String(actual));
     case "gt":
-      return Number(actual) > Number(condition.value);
-    case "lt":
-      return Number(actual) < Number(condition.value);
+    case "lt": {
+      const n = typeof actual === "number" ? actual : typeof actual === "string" && actual.trim() !== "" ? Number(actual) : NaN;
+      if (!Number.isFinite(n)) return "unknown";
+      return condition.op === "gt" ? n > Number(condition.value) : n < Number(condition.value);
+    }
   }
 }
 
+/**
+ * A rule matches when every condition holds. Conditions that cannot be judged count as holding for
+ * rules that deny or hold for approval, and as failing for rules that allow. A call with a missing
+ * amount, a text amount or broken JSON therefore meets the strict rule and never the permissive one.
+ */
 function ruleMatches(rule: ToolRule, call: ToolCall): boolean {
   if (!globToRegExp(rule.tool).test(call.name)) return false;
-  return (rule.when ?? []).every((c) => holds(c, call.args));
+  let unknown = false;
+  for (const condition of rule.when ?? []) {
+    const verdict = evaluate(condition, call);
+    if (verdict === false) return false;
+    if (verdict === "unknown") unknown = true;
+  }
+  return !unknown || rule.action !== "allow";
 }
 
-/** Decides one tool call. Arguments that are not valid JSON never match a conditional rule. */
 export function decideToolCall(policy: Policy, call: ToolCall): ToolDecision {
   for (let i = 0; i < policy.tools.length; i++) {
     const rule = policy.tools[i]!;
-    if (!call.argsValid && (rule.when?.length ?? 0) > 0) continue;
     if (ruleMatches(rule, call)) {
       return { call, action: rule.action, reason: rule.reason ?? `matched rule ${i + 1}`, ruleIndex: i };
     }
@@ -54,7 +91,7 @@ export function decideToolCall(policy: Policy, call: ToolCall): ToolDecision {
 
 const SEVERITY: Record<ToolAction, number> = { allow: 0, require_approval: 1, deny: 2 };
 
-/** The strictest decision wins: any deny blocks the response, otherwise any approval holds it. */
+/** The strictest decision wins: any deny blocks the whole response, otherwise any approval holds it. */
 export function overallAction(decisions: ToolDecision[]): ToolAction {
   return decisions.reduce<ToolAction>(
     (worst, d) => (SEVERITY[d.action] > SEVERITY[worst] ? d.action : worst),
@@ -62,9 +99,10 @@ export function overallAction(decisions: ToolDecision[]): ToolAction {
   );
 }
 
-function parseArgs(raw: unknown): { args: Record<string, unknown>; valid: boolean } {
-  if (raw && typeof raw === "object") return { args: raw as Record<string, unknown>, valid: true };
-  if (typeof raw !== "string" || raw.trim() === "") return { args: {}, valid: raw === "" || raw === undefined };
+export function parseToolArguments(raw: unknown): { args: Record<string, unknown>; valid: boolean } {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return { args: raw as Record<string, unknown>, valid: true };
+  if (raw === undefined || raw === null || raw === "") return { args: {}, valid: true };
+  if (typeof raw !== "string") return { args: {}, valid: false };
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return { args: parsed, valid: true };
@@ -79,7 +117,7 @@ export function toolCallsFromCompletion(body: any): ToolCall[] {
   const calls: ToolCall[] = [];
   for (const choice of body?.choices ?? []) {
     for (const tc of choice?.message?.tool_calls ?? []) {
-      const { args, valid } = parseArgs(tc?.function?.arguments);
+      const { args, valid } = parseToolArguments(tc?.function?.arguments);
       calls.push({ id: tc?.id, name: String(tc?.function?.name ?? ""), args, argsValid: valid });
     }
   }
@@ -109,7 +147,7 @@ export function toolCallsFromSse(text: string): ToolCall[] {
     }
   }
   return [...partial.values()].map((p) => {
-    const { args, valid } = parseArgs(p.args);
+    const { args, valid } = parseToolArguments(p.args);
     return { id: p.id, name: p.name, args, argsValid: valid };
   });
 }
