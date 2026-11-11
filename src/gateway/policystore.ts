@@ -55,6 +55,7 @@ export function parsePolicy(input: unknown): Policy {
 export class PolicyStore {
   constructor(private readonly db: DatabaseSync) {}
 
+  /** The organization-wide policy, used by every team that has none of its own. */
   get(): Policy {
     const row = this.db.prepare("SELECT doc FROM policy WHERE id = 1").get() as { doc: string } | undefined;
     return row ? parsePolicy(JSON.parse(row.doc)) : DEFAULT_POLICY;
@@ -66,5 +67,33 @@ export class PolicyStore {
       .prepare("INSERT INTO policy (id, doc) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET doc = excluded.doc")
       .run(JSON.stringify(policy));
     return policy;
+  }
+
+  /** A team's own policy, or undefined when the team follows the organization policy. */
+  getTeam(team: string): Policy | undefined {
+    const row = this.db.prepare("SELECT doc FROM team_policies WHERE team = ?").get(team) as { doc: string } | undefined;
+    return row ? parsePolicy(JSON.parse(row.doc)) : undefined;
+  }
+
+  setTeam(team: string, input: unknown): Policy {
+    const policy = parsePolicy(input);
+    this.db
+      .prepare("INSERT INTO team_policies (team, doc) VALUES (?, ?) ON CONFLICT(team) DO UPDATE SET doc = excluded.doc")
+      .run(team, JSON.stringify(policy));
+    return policy;
+  }
+
+  deleteTeam(team: string): boolean {
+    return this.db.prepare("DELETE FROM team_policies WHERE team = ?").run(team).changes === 1;
+  }
+
+  /** The policy that applies to a team: its own if it has one, otherwise the organization policy. */
+  effective(team: string): Policy {
+    return this.getTeam(team) ?? this.get();
+  }
+
+  /** Teams that have their own policy. */
+  teamsWithPolicy(): string[] {
+    return (this.db.prepare("SELECT team FROM team_policies ORDER BY team").all() as { team: string }[]).map((r) => r.team);
   }
 }

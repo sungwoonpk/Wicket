@@ -9,7 +9,8 @@ export type Outcome =
   | "budget_exceeded"
   | "rate_limited"
   | "model_denied"
-  | "upstream_error";
+  | "upstream_error"
+  | "cancelled";
 
 export interface RequestRecord {
   id: number;
@@ -27,6 +28,13 @@ export interface RequestRecord {
 }
 
 export type NewRequestRecord = Omit<RequestRecord, "id" | "at" | "agentName">;
+
+export interface TimeBucket {
+  bucket: string;
+  total: number;
+  spendUsd: number;
+  byOutcome: Record<string, number>;
+}
 
 export interface Summary {
   requests: number;
@@ -84,13 +92,14 @@ export class RequestStore {
       );
   }
 
-  recent(limit = 100): RequestRecord[] {
+  recent(limit = 100, team: string | null = null, filter: { outcome?: string; agentId?: string } = {}): RequestRecord[] {
     return this.db
       .prepare(
         `SELECT r.*, a.name AS agent_name FROM requests r LEFT JOIN agents a ON a.id = r.agent_id
+         WHERE (? IS NULL OR a.team = ?) AND (? IS NULL OR r.outcome = ?) AND (? IS NULL OR r.agent_id = ?)
          ORDER BY r.id DESC LIMIT ?`,
       )
-      .all(limit)
+      .all(team, team, filter.outcome ?? null, filter.outcome ?? null, filter.agentId ?? null, filter.agentId ?? null, limit)
       .map(fromRow);
   }
 
@@ -102,14 +111,15 @@ export class RequestStore {
     return row.total;
   }
 
-  summary(): Summary {
+  summary(team: string | null = null): Summary {
     const rows = this.db
       .prepare(
-        `SELECT outcome, COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS spend,
-                COALESCE(SUM(COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0)), 0) AS tokens
-         FROM requests GROUP BY outcome`,
+        `SELECT r.outcome AS outcome, COUNT(*) AS n, COALESCE(SUM(r.cost_usd), 0) AS spend,
+                COALESCE(SUM(COALESCE(r.prompt_tokens, 0) + COALESCE(r.completion_tokens, 0)), 0) AS tokens
+         FROM requests r LEFT JOIN agents a ON a.id = r.agent_id
+         WHERE (? IS NULL OR a.team = ?) GROUP BY r.outcome`,
       )
-      .all() as { outcome: Outcome; n: number; spend: number; tokens: number }[];
+      .all(team, team) as { outcome: Outcome; n: number; spend: number; tokens: number }[];
     const summary: Summary = { requests: 0, spendUsd: 0, blocked: 0, redacted: 0, tokens: 0, byOutcome: {} };
     for (const r of rows) {
       summary.requests += r.n;
@@ -120,5 +130,43 @@ export class RequestStore {
       if (r.outcome === "redacted") summary.redacted += r.n;
     }
     return summary;
+  }
+
+  /** Requests and spend per hour for the last `hours` hours, oldest first, with empty hours included. */
+  timeseries(hours: number, team: string | null = null, now = new Date()): TimeBucket[] {
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours()));
+    const start = new Date(end.getTime() - (hours - 1) * 3_600_000);
+    const rows = this.db
+      .prepare(
+        `SELECT strftime('%Y-%m-%dT%H:00:00.000Z', r.at) AS bucket, r.outcome AS outcome, COUNT(*) AS n, COALESCE(SUM(r.cost_usd), 0) AS spend
+         FROM requests r LEFT JOIN agents a ON a.id = r.agent_id
+         WHERE r.at >= ? AND (? IS NULL OR a.team = ?) GROUP BY bucket, r.outcome`,
+      )
+      .all(start.toISOString(), team, team) as { bucket: string; outcome: string; n: number; spend: number }[];
+    const buckets = new Map<string, TimeBucket>();
+    for (let i = 0; i < hours; i++) {
+      const at = new Date(start.getTime() + i * 3_600_000).toISOString();
+      buckets.set(at, { bucket: at, total: 0, spendUsd: 0, byOutcome: {} });
+    }
+    for (const r of rows) {
+      const b = buckets.get(r.bucket);
+      if (!b) continue;
+      b.total += r.n;
+      b.spendUsd += r.spend;
+      b.byOutcome[r.outcome] = r.n;
+    }
+    return [...buckets.values()];
+  }
+
+  /**
+   * Records that a budget threshold (a percent, such as 80 or 100) was crossed this month.
+   * Returns true only the first time, so each alert fires once per agent per month.
+   */
+  claimBudgetAlert(agentId: string, threshold: number, now = new Date()): boolean {
+    const month = monthStart(now).slice(0, 7);
+    const result = this.db
+      .prepare("INSERT OR IGNORE INTO budget_alerts (agent_id, month, threshold, at) VALUES (?, ?, ?, ?)")
+      .run(agentId, month, threshold, now.toISOString());
+    return result.changes === 1;
   }
 }

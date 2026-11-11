@@ -13,6 +13,8 @@ import { RateLimiter } from "../src/gateway/ratelimit.js";
 import { PolicyError, PolicyStore, parsePolicy } from "../src/gateway/policystore.js";
 import { DEFAULT_POLICY } from "../src/policy/types.js";
 
+const KEY = "test-signing-key";
+
 describe("AgentStore", () => {
   it("creates agents, authenticates by key and never stores the key", () => {
     const db = openDb();
@@ -54,7 +56,7 @@ describe("AgentStore", () => {
 
 describe("AuditLog", () => {
   it("chains events and verifies a clean log", () => {
-    const audit = new AuditLog(openDb());
+    const audit = new AuditLog(openDb(), KEY);
     audit.append("agent.created", "admin", { id: "a1" });
     audit.append("policy.updated", "admin");
     audit.append("request.denied", "agent_1", { tool: "delete_all" });
@@ -65,7 +67,7 @@ describe("AuditLog", () => {
 
   it("detects an edited event", () => {
     const db = openDb();
-    const audit = new AuditLog(db);
+    const audit = new AuditLog(db, KEY);
     audit.append("a", "x");
     audit.append("b", "x", { amount: 1 });
     audit.append("c", "x");
@@ -77,7 +79,7 @@ describe("AuditLog", () => {
 
   it("detects a removed event in the middle", () => {
     const db = openDb();
-    const audit = new AuditLog(db);
+    const audit = new AuditLog(db, KEY);
     audit.append("a", "x");
     audit.append("b", "x");
     audit.append("c", "x");
@@ -88,7 +90,7 @@ describe("AuditLog", () => {
   });
 
   it("verifies an empty log", () => {
-    assert.deepEqual(new AuditLog(openDb()).verify(), { ok: true, checked: 0 });
+    assert.deepEqual(new AuditLog(openDb(), KEY).verify(), { ok: true, checked: 0 });
   });
 });
 

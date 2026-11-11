@@ -114,20 +114,23 @@ describe("proxy basics", () => {
 
   it("returns 502 when the upstream is unreachable", async () => {
     const dead = createGateway({ upstreamUrl: "http://127.0.0.1:1", adminToken: ADMIN });
-    const base = await listen(dead);
-    const created = await fetch(`${base}/admin/agents`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
-      body: JSON.stringify({ name: "a" }),
-    });
-    const key = ((await created.json()) as any).key;
-    const res = await fetch(`${base}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-      body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
-    });
-    assert.equal(res.status, 502);
-    dead.close();
+    try {
+      const base = await listen(dead);
+      const created = await fetch(`${base}/admin/agents`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+        body: JSON.stringify({ name: "a" }),
+      });
+      const key = ((await created.json()) as any).key;
+      const res = await fetch(`${base}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model: "demo-small", messages: [{ role: "user", content: "hi" }] }),
+      });
+      assert.equal(res.status, 502);
+    } finally {
+      dead.close();
+    }
   });
 });
 
@@ -176,15 +179,20 @@ describe("admin API", () => {
     assert.match(json, /wicket_agents \d+/);
   });
 
-  it("serves a dashboard with a strict content security policy", async () => {
-    const res = await fetch(`${h.base}/dashboard`);
-    assert.equal(res.status, 200);
-    const csp = res.headers.get("content-security-policy")!;
-    assert.match(csp, /default-src 'none'/);
-    const nonce = /script-src 'nonce-([^']+)'/.exec(csp)![1]!;
-    const html = await res.text();
-    assert.ok(html.includes(`nonce="${nonce}"`));
-    assert.ok(!html.includes("__NONCE__"));
+  it("serves the dashboard under a strict content security policy", async () => {
+    const page = await fetch(`${h.base}/dashboard`);
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get("content-type")!, /text\/html/);
+    const csp = page.headers.get("content-security-policy")!;
+    for (const directive of ["default-src 'none'", "script-src 'self'", "style-src 'self'", "frame-ancestors 'none'", "connect-src 'self'"]) {
+      assert.ok(csp.includes(directive), `missing ${directive}`);
+    }
+    assert.ok(!csp.includes("unsafe-inline") && !csp.includes("unsafe-eval"));
+    assert.equal(page.headers.get("x-frame-options"), "DENY");
+    assert.equal(page.headers.get("x-content-type-options"), "nosniff");
+    assert.match((await fetch(`${h.base}/dashboard/app.js`)).headers.get("content-type")!, /javascript/);
+    assert.match((await fetch(`${h.base}/dashboard/app.css`)).headers.get("content-type")!, /css/);
+    assert.equal((await fetch(`${h.base}/dashboard/secret.js`)).status, 401, "unknown dashboard paths fall through to the admin check");
   });
 });
 

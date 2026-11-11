@@ -57,15 +57,30 @@ export class ApprovalQueue {
     return row ? fromRow(row) : undefined;
   }
 
-  list(status?: ApprovalStatus, limit = 100): Approval[] {
-    const rows = status
-      ? this.db.prepare("SELECT * FROM approvals WHERE status = ? ORDER BY at DESC LIMIT ?").all(status, limit)
-      : this.db.prepare("SELECT * FROM approvals ORDER BY at DESC LIMIT ?").all(limit);
-    return rows.map(fromRow);
+  list(status?: ApprovalStatus, limit = 100, team: string | null = null): Approval[] {
+    return this.db
+      .prepare(
+        `SELECT p.* FROM approvals p LEFT JOIN agents a ON a.id = p.agent_id
+         WHERE (? IS NULL OR p.status = ?) AND (? IS NULL OR a.team = ?)
+         ORDER BY p.at DESC, p.rowid DESC LIMIT ?`,
+      )
+      .all(status ?? null, status ?? null, team, team, limit)
+      .map(fromRow);
   }
 
-  pendingCount(): number {
-    return (this.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'").get() as { n: number }).n;
+  pendingCount(team: string | null = null): number {
+    return (
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM approvals p LEFT JOIN agents a ON a.id = p.agent_id
+           WHERE p.status = 'pending' AND (? IS NULL OR a.team = ?)`,
+        )
+        .get(team, team) as { n: number }
+    ).n;
+  }
+
+  pendingForAgent(agentId: string): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE agent_id = ? AND status = 'pending'").get(agentId) as { n: number }).n;
   }
 
   /** Only a pending approval can be decided, and only once. Returns undefined otherwise. */
