@@ -44,6 +44,23 @@ export function replyFor(messages: ChatMessage[]): string {
   return `mock reply to: ${last?.content ?? ""}`;
 }
 
+export interface MockToolCall {
+  name: string;
+  /** Arguments exactly as the model would send them: a JSON string. */
+  arguments: string;
+}
+
+/**
+ * Looks for `[[tool:NAME {json}]]` in the last user message. When present, the mock answers with
+ * that tool call instead of text, which lets tests and demos produce any tool call on demand.
+ */
+export function toolCallFor(messages: ChatMessage[]): MockToolCall | undefined {
+  const last = [...messages].reverse().find((m) => m.role === "user");
+  const match = /\[\[tool:([A-Za-z0-9_.-]+)(?: ([^\]]*))?\]\]/.exec(String(last?.content ?? ""));
+  if (!match) return undefined;
+  return { name: match[1]!, arguments: match[2] ?? "{}" };
+}
+
 export function createMockUpstream(options: MockOptions = {}): Server {
   return createServer(async (req, res) => {
     try {
@@ -62,9 +79,10 @@ export function createMockUpstream(options: MockOptions = {}): Server {
       if (options.latencyMs) await sleep(options.latencyMs);
 
       const model = body.model ?? "mock-model";
-      const reply = replyFor(messages);
+      const toolCall = toolCallFor(messages);
+      const reply = toolCall ? "" : replyFor(messages);
       const promptTokens = estimateTokens(messages.map((m) => m.content ?? "").join("\n"));
-      const completionTokens = estimateTokens(reply);
+      const completionTokens = estimateTokens(toolCall ? toolCall.name + toolCall.arguments : reply);
       const usage = {
         prompt_tokens: promptTokens,
         completion_tokens: completionTokens,
@@ -73,13 +91,20 @@ export function createMockUpstream(options: MockOptions = {}): Server {
       const id = "chatcmpl-mock";
       const created = 0;
 
+      const toolCallPayload = toolCall
+        ? [{ id: "call_mock_1", type: "function", function: { name: toolCall.name, arguments: toolCall.arguments } }]
+        : undefined;
+
       if (!body.stream) {
+        const message = toolCallPayload
+          ? { role: "assistant", content: null, tool_calls: toolCallPayload }
+          : { role: "assistant", content: reply };
         sendJson(res, 200, {
           id,
           object: "chat.completion",
           created,
           model,
-          choices: [{ index: 0, message: { role: "assistant", content: reply }, finish_reason: "stop" }],
+          choices: [{ index: 0, message, finish_reason: toolCallPayload ? "tool_calls" : "stop" }],
           usage,
         });
         return;
@@ -90,6 +115,31 @@ export function createMockUpstream(options: MockOptions = {}): Server {
         "cache-control": "no-cache",
         connection: "keep-alive",
       });
+
+      if (toolCall) {
+        // Split the arguments in two fragments, as real providers stream them.
+        const half = Math.ceil(toolCall.arguments.length / 2);
+        const fragments = [
+          { index: 0, id: "call_mock_1", type: "function", function: { name: toolCall.name, arguments: toolCall.arguments.slice(0, half) } },
+          { index: 0, function: { arguments: toolCall.arguments.slice(half) } },
+        ];
+        fragments.forEach((fragment, i) => {
+          const chunk = {
+            id, object: "chat.completion.chunk", created, model,
+            choices: [{ index: 0, delta: i === 0 ? { role: "assistant", tool_calls: [fragment] } : { tool_calls: [fragment] }, finish_reason: null }],
+          };
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        });
+        const finish = {
+          id, object: "chat.completion.chunk", created, model,
+          choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+          usage,
+        };
+        res.write(`data: ${JSON.stringify(finish)}\n\n`);
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
       const words = reply.split(" ");
       words.forEach((word, i) => {
         const piece = i === 0 ? word : ` ${word}`;
