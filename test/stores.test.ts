@@ -447,3 +447,17 @@ describe("migrations", () => {
     }
   });
 });
+
+describe("parsePriceTable", () => {
+  it("accepts a valid table", async () => {
+    const { parsePriceTable } = await import("../src/gateway/pricing.js");
+    assert.deepEqual(parsePriceTable({ "gpt-x": { inputPerM: 2.5, outputPerM: 10 }, "*": { inputPerM: 1, outputPerM: 1 } })["gpt-x"], { inputPerM: 2.5, outputPerM: 10 });
+  });
+
+  it("refuses anything that could silently price requests at zero", async () => {
+    const { parsePriceTable } = await import("../src/gateway/pricing.js");
+    for (const bad of [null, [], "x", { m: null }, { m: { inputPerM: 1 } }, { m: { inputPerM: -1, outputPerM: 1 } }, { m: { inputPerM: "1", outputPerM: 1 } }, { m: { inputPerM: NaN, outputPerM: 1 } }]) {
+      assert.throws(() => parsePriceTable(bad), Error, JSON.stringify(bad));
+    }
+  });
+});
