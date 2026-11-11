@@ -14,7 +14,8 @@
     "dev:mock": "tsx src/mock/main.ts",
     "dev": "tsx src/gateway/main.ts",
     "demo": "tsx scripts/demo.ts",
-    "bench": "tsx scripts/bench.ts"
+    "bench": "tsx scripts/bench.ts",
+    "test:ui": "tsx scripts/ui-smoke.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
