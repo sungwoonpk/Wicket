@@ -1,6 +1,6 @@
 # 0004. The audit trail is a hash chain
 
-Status: accepted
+Status: accepted. The newest-events gap named below is closed by [0006](0006-signed-audit-head.md).
 
 ## Context
 
@@ -25,9 +25,8 @@ tool-call denials, approval requested, approved and denied.
 
 ## Costs
 
-- **Tail truncation is not detected.** Deleting the newest events leaves a valid shorter chain.
-  Closing that needs the latest hash to be copied somewhere the database owner cannot edit, such
-  as a signed checkpoint or an external log. That is not built yet.
+- **Tail truncation** is not detected by the chain alone. It is caught by the signed head, see
+  [0006](0006-signed-audit-head.md).
 - The chain proves integrity, not authorship. Someone who can rewrite the whole table and
   recompute every hash can forge a log. Anchoring externally fixes this too.
 - Writes are serialized, which is fine for one SQLite file and would need rethinking on a

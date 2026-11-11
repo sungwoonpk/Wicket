@@ -1,69 +1,13 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { createMockUpstream } from "../src/mock/server.js";
-import { createGateway, createGatewayApp, extractUsage, type GatewayApp } from "../src/gateway/server.js";
-
-const ADMIN = "test-admin-token";
-
-function listen(server: Server): Promise<string> {
-  return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)),
-  );
-}
-
-interface Harness {
-  base: string;
-  app: GatewayApp;
-  close(): void;
-  admin(path: string, method?: string, body?: unknown): Promise<{ status: number; json: any }>;
-  newAgent(settings?: Record<string, unknown>): Promise<string>;
-  chat(key: string | undefined, content: string, extra?: Record<string, unknown>): Promise<Response>;
-}
-
-async function harness(): Promise<Harness> {
-  const mock = createMockUpstream();
-  const upstreamUrl = await listen(mock);
-  const app = createGatewayApp({ upstreamUrl, adminToken: ADMIN });
-  const base = await listen(app.server);
-  let n = 0;
-  const h: Harness = {
-    base,
-    app,
-    close() {
-      mock.close();
-      app.server.close();
-    },
-    async admin(path, method = "GET", body) {
-      const res = await fetch(`${base}${path}`, {
-        method,
-        headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      const text = await res.text();
-      let json: any = text;
-      try { json = JSON.parse(text); } catch { /* plain text, such as /metrics */ }
-      return { status: res.status, json };
-    },
-    async newAgent(settings = {}) {
-      const { json } = await h.admin("/admin/agents", "POST", { name: `agent-${++n}`, ...settings });
-      return json.key as string;
-    },
-    chat(key, content, extra = {}) {
-      return fetch(`${base}/v1/chat/completions`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
-        body: JSON.stringify({ model: "demo-small", messages: [{ role: "user", content }], ...extra }),
-      });
-    },
-  };
-  return h;
-}
+import { createGateway, extractUsage } from "../src/gateway/server.js";
+import { ADMIN, harness, listen, type Harness } from "./helpers.js";
 
 describe("proxy basics", () => {
   let h: Harness;
-  before(async () => { h = await harness(); });
+  before(async () => {
+    h = await harness();
+  });
   after(() => h.close());
 
   it("reports health", async () => {
@@ -114,26 +58,31 @@ describe("proxy basics", () => {
 
   it("returns 502 when the upstream is unreachable", async () => {
     const dead = createGateway({ upstreamUrl: "http://127.0.0.1:1", adminToken: ADMIN });
-    const base = await listen(dead);
-    const created = await fetch(`${base}/admin/agents`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
-      body: JSON.stringify({ name: "a" }),
-    });
-    const key = ((await created.json()) as any).key;
-    const res = await fetch(`${base}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-      body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
-    });
-    assert.equal(res.status, 502);
-    dead.close();
+    try {
+      const base = await listen(dead);
+      const created = await fetch(`${base}/admin/agents`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+        body: JSON.stringify({ name: "a" }),
+      });
+      const key = ((await created.json()) as any).key;
+      const res = await fetch(`${base}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model: "demo-small", messages: [{ role: "user", content: "hi" }] }),
+      });
+      assert.equal(res.status, 502);
+    } finally {
+      dead.close();
+    }
   });
 });
 
 describe("admin API", () => {
   let h: Harness;
-  before(async () => { h = await harness(); });
+  before(async () => {
+    h = await harness();
+  });
   after(() => h.close());
 
   it("requires the admin token everywhere", async () => {
@@ -165,7 +114,10 @@ describe("admin API", () => {
 
   it("validates and stores the policy", async () => {
     assert.equal((await h.admin("/admin/policy", "PUT", { tools: [{ tool: "x", action: "explode" }] })).status, 400);
-    const ok = await h.admin("/admin/policy", "PUT", { redaction: { mode: "redact" }, tools: [{ tool: "x", action: "deny" }] });
+    const ok = await h.admin("/admin/policy", "PUT", {
+      redaction: { mode: "redact" },
+      tools: [{ tool: "x", action: "deny" }],
+    });
     assert.equal(ok.status, 200);
     assert.equal((await h.admin("/admin/policy")).json.policy.redaction.mode, "redact");
   });
@@ -176,21 +128,34 @@ describe("admin API", () => {
     assert.match(json, /wicket_agents \d+/);
   });
 
-  it("serves a dashboard with a strict content security policy", async () => {
-    const res = await fetch(`${h.base}/dashboard`);
-    assert.equal(res.status, 200);
-    const csp = res.headers.get("content-security-policy")!;
-    assert.match(csp, /default-src 'none'/);
-    const nonce = /script-src 'nonce-([^']+)'/.exec(csp)![1]!;
-    const html = await res.text();
-    assert.ok(html.includes(`nonce="${nonce}"`));
-    assert.ok(!html.includes("__NONCE__"));
+  it("serves the dashboard under a strict content security policy", async () => {
+    const page = await fetch(`${h.base}/dashboard`);
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get("content-type")!, /text\/html/);
+    const csp = page.headers.get("content-security-policy")!;
+    for (const directive of [
+      "default-src 'none'",
+      "script-src 'self'",
+      "style-src 'self'",
+      "frame-ancestors 'none'",
+      "connect-src 'self'",
+    ]) {
+      assert.ok(csp.includes(directive), `missing ${directive}`);
+    }
+    assert.ok(!csp.includes("unsafe-inline") && !csp.includes("unsafe-eval"));
+    assert.equal(page.headers.get("x-frame-options"), "DENY");
+    assert.equal(page.headers.get("x-content-type-options"), "nosniff");
+    assert.match((await fetch(`${h.base}/dashboard/app.js`)).headers.get("content-type")!, /javascript/);
+    assert.match((await fetch(`${h.base}/dashboard/app.css`)).headers.get("content-type")!, /css/);
+    assert.equal((await fetch(`${h.base}/dashboard/secret.js`)).status, 404, "only the three known files are served");
   });
 });
 
 describe("access controls", () => {
   let h: Harness;
-  before(async () => { h = await harness(); });
+  before(async () => {
+    h = await harness();
+  });
   after(() => h.close());
 
   it("denies models that are not on the agent's allow list", async () => {
@@ -228,7 +193,12 @@ describe("policy enforcement", () => {
       defaultToolAction: "allow",
       tools: [
         { tool: "delete_*", action: "deny", reason: "destructive" },
-        { tool: "refund", action: "require_approval", when: [{ arg: "amount", op: "gt", value: 100 }], reason: "large refund" },
+        {
+          tool: "refund",
+          action: "require_approval",
+          when: [{ arg: "amount", op: "gt", value: 100 }],
+          reason: "large refund",
+        },
       ],
     });
   });
@@ -252,14 +222,19 @@ describe("policy enforcement", () => {
       redaction: { mode: "redact", detectors: ["email", "ssn"] },
       tools: [
         { tool: "delete_*", action: "deny", reason: "destructive" },
-        { tool: "refund", action: "require_approval", when: [{ arg: "amount", op: "gt", value: 100 }], reason: "large refund" },
+        {
+          tool: "refund",
+          action: "require_approval",
+          when: [{ arg: "amount", op: "gt", value: 100 }],
+          reason: "large refund",
+        },
       ],
     });
   });
 
   it("denies a destructive tool call and does not return it", async () => {
     const key = await h.newAgent();
-    const res = await h.chat(key, "[[tool:delete_customer {\"id\":7}]]");
+    const res = await h.chat(key, '[[tool:delete_customer {"id":7}]]');
     assert.equal(res.status, 403);
     const body = (await res.json()) as any;
     assert.equal(body.error.type, "policy_violation");
@@ -304,7 +279,7 @@ describe("policy enforcement", () => {
   it("keeps a denied approval blocked and hides approvals from other agents", async () => {
     const key = await h.newAgent();
     const other = await h.newAgent();
-    const id = (((await (await h.chat(key, '[[tool:refund {"amount":900}]]')).json()) as any).approval_id) as string;
+    const id = ((await (await h.chat(key, '[[tool:refund {"amount":900}]]')).json()) as any).approval_id as string;
     await h.admin(`/admin/approvals/${id}/deny`, "POST");
     const denied = await fetch(`${h.base}/v1/approvals/${id}`, { headers: { authorization: `Bearer ${key}` } });
     assert.equal(denied.status, 403);
@@ -325,7 +300,15 @@ describe("policy enforcement", () => {
     assert.equal(verify.ok, true);
     assert.ok(verify.checked > 5);
     const types = new Set((await h.admin("/admin/audit?limit=200")).json.events.map((e: any) => e.type));
-    for (const t of ["agent.created", "policy.updated", "request.redacted", "tool.denied", "approval.requested", "approval.approved", "approval.denied"]) {
+    for (const t of [
+      "agent.created",
+      "policy.updated",
+      "request.redacted",
+      "tool.denied",
+      "approval.requested",
+      "approval.approved",
+      "approval.denied",
+    ]) {
       assert.ok(types.has(t), `missing ${t}`);
     }
   });
@@ -340,7 +323,10 @@ describe("policy enforcement", () => {
 
 describe("extractUsage", () => {
   it("reads usage from a JSON body", () => {
-    assert.deepEqual(extractUsage('{"usage":{"prompt_tokens":3,"completion_tokens":5}}', false), { promptTokens: 3, completionTokens: 5 });
+    assert.deepEqual(extractUsage('{"usage":{"prompt_tokens":3,"completion_tokens":5}}', false), {
+      promptTokens: 3,
+      completionTokens: 5,
+    });
   });
 
   it("reads usage from the last SSE event that has it", () => {

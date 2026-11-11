@@ -5,9 +5,40 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  check:
+    name: Lint, types and tests (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      # Fails if line, function or branch coverage falls under the thresholds in package.json.
+      - run: npm run test:coverage
+
+  build:
+    name: Build and start the compiled server
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,5 +46,81 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
+      - run: npm run build
+      - name: The compiled server starts and answers
+        env:
+          WICKET_ADMIN_TOKEN: ci-admin-token-0123456789
+          WICKET_DB: ":memory:"
+          PORT: "8081"
+        run: |
+          node --disable-warning=ExperimentalWarning dist/src/gateway/main.js &
+          pid=$!
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8081/readyz && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8081/readyz
+          curl -fsS -o /dev/null http://127.0.0.1:8081/dashboard/app.js
+          kill -TERM $pid
+          wait $pid
+
+  ui:
+    name: Dashboard in a real browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:ui
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+
+  docker:
+    name: Container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t wicket:ci .
+      - name: The container becomes healthy and serves the dashboard
+        run: |
+          docker run -d --name wicket \
+            -e WICKET_ADMIN_TOKEN=ci-admin-token-0123456789 \
+            -e WICKET_AUDIT_KEY=ci-audit-key-0123456789abcdef \
+            -p 8082:8080 wicket:ci
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' wicket)
+            [ "$status" = "healthy" ] && break
+            sleep 2
+          done
+          echo "health: $status"
+          [ "$status" = "healthy" ]
+          curl -fsS http://127.0.0.1:8082/readyz
+          curl -fsS -o /dev/null http://127.0.0.1:8082/dashboard
+      - name: The container runs as an unprivileged user
+        run: |
+          user=$(docker exec wicket id -un)
+          echo "user: $user"
+          [ "$user" = "node" ]
+      - name: Logs on failure
+        if: failure()
+        run: docker logs wicket
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Wicket ships with no runtime dependencies. This is the check that keeps it that way.
+      - run: npm audit --omit=dev --audit-level=low
+      # Development tools may carry moderate advisories. High and critical ones fail the build.
+      - run: npm audit --audit-level=high

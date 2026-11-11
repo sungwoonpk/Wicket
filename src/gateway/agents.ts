@@ -10,6 +10,8 @@ export interface Agent {
   allowedModels: string[] | null;
   monthlyBudgetUsd: number | null;
   ratePerMinute: number | null;
+  /** Most requests this agent may have in flight at once, or null for no limit. */
+  maxConcurrent: number | null;
 }
 
 export interface NewAgent {
@@ -18,6 +20,7 @@ export interface NewAgent {
   allowedModels?: string[] | null;
   monthlyBudgetUsd?: number | null;
   ratePerMinute?: number | null;
+  maxConcurrent?: number | null;
 }
 
 export type AgentChanges = Partial<Omit<NewAgent, "name">> & { disabled?: boolean; name?: string };
@@ -36,6 +39,7 @@ function fromRow(row: any): Agent {
     allowedModels: row.allowed_models ? JSON.parse(row.allowed_models) : null,
     monthlyBudgetUsd: row.monthly_budget_usd ?? null,
     ratePerMinute: row.rate_per_minute ?? null,
+    maxConcurrent: row.max_concurrent ?? null,
   };
 }
 
@@ -51,8 +55,8 @@ export class AgentStore {
     const id = `agent_${randomBytes(6).toString("hex")}`;
     this.db
       .prepare(
-        `INSERT INTO agents (id, name, team, key_hash, created_at, allowed_models, monthly_budget_usd, rate_per_minute)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO agents (id, name, team, key_hash, created_at, allowed_models, monthly_budget_usd, rate_per_minute, max_concurrent)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -63,6 +67,7 @@ export class AgentStore {
         input.allowedModels ? JSON.stringify(input.allowedModels) : null,
         input.monthlyBudgetUsd ?? null,
         input.ratePerMinute ?? null,
+        input.maxConcurrent ?? null,
       );
     return { agent: this.get(id)!, key };
   }
@@ -77,8 +82,11 @@ export class AgentStore {
     return row ? fromRow(row) : undefined;
   }
 
-  list(): Agent[] {
-    return this.db.prepare("SELECT * FROM agents ORDER BY created_at, id").all().map(fromRow);
+  list(team: string | null = null): Agent[] {
+    return this.db
+      .prepare("SELECT * FROM agents WHERE (? IS NULL OR team = ?) ORDER BY created_at, id")
+      .all(team, team)
+      .map(fromRow);
   }
 
   update(id: string, changes: AgentChanges): Agent | undefined {
@@ -87,7 +95,7 @@ export class AgentStore {
     const next = { ...current, ...changes };
     this.db
       .prepare(
-        `UPDATE agents SET name = ?, team = ?, disabled = ?, allowed_models = ?, monthly_budget_usd = ?, rate_per_minute = ?
+        `UPDATE agents SET name = ?, team = ?, disabled = ?, allowed_models = ?, monthly_budget_usd = ?, rate_per_minute = ?, max_concurrent = ?
          WHERE id = ?`,
       )
       .run(
@@ -97,8 +105,17 @@ export class AgentStore {
         next.allowedModels ? JSON.stringify(next.allowedModels) : null,
         next.monthlyBudgetUsd,
         next.ratePerMinute,
+        next.maxConcurrent,
         id,
       );
     return this.get(id);
+  }
+
+  /** Replaces the agent's key. The old key stops working at once. Returns the new key, shown once. */
+  rotateKey(id: string): { agent: Agent; key: string } | undefined {
+    if (!this.get(id)) return undefined;
+    const key = `wk_${randomBytes(24).toString("base64url")}`;
+    this.db.prepare("UPDATE agents SET key_hash = ? WHERE id = ?").run(hash(key), id);
+    return { agent: this.get(id)!, key };
   }
 }

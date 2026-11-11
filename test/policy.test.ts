@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { redactMessages, redactText } from "../src/policy/redact.js";
-import {
-  decideToolCall,
-  overallAction,
-  toolCallsFromCompletion,
-  toolCallsFromSse,
-} from "../src/policy/tools.js";
+import { decideToolCall, overallAction, toolCallsFromCompletion, toolCallsFromSse } from "../src/policy/tools.js";
 import { DEFAULT_POLICY, type Policy, type ToolCall } from "../src/policy/types.js";
 
 const ALL = DEFAULT_POLICY.redaction.detectors;
@@ -40,11 +35,39 @@ describe("redactText", () => {
   });
 });
 
+describe("redaction edge cases", () => {
+  it("sees through invisible characters and fullwidth digits", () => {
+    assert.equal(redactText("ann@exa\u200Bmple.com", ALL).text, "[REDACTED:EMAIL]");
+    assert.equal(redactText("ssn １２３-４５-６７８９", ALL).text, "ssn [REDACTED:SSN]");
+    assert.equal(redactText("4242\u200B 4242 4242 4242", ALL).text, "[REDACTED:CREDIT_CARD]");
+  });
+
+  it("leaves ordinary text alone", () => {
+    const text = "Meeting at 3pm, room 12. Total: 1,234.56 USD. See https://example.com/a-b.";
+    assert.equal(redactText(text, ALL).text, text);
+    assert.deepEqual(redactText(text, ALL).findings, []);
+  });
+
+  it("handles empty and very long input", () => {
+    assert.equal(redactText("", ALL).text, "");
+    const long = "word ".repeat(200_000) + "ann@example.com";
+    const started = performance.now();
+    assert.ok(redactText(long, ALL).text.endsWith("[REDACTED:EMAIL]"));
+    assert.ok(performance.now() - started < 3000);
+  });
+});
+
 describe("redactMessages", () => {
   it("handles string and part-array content without mutating the input", () => {
     const input = [
       { role: "user", content: "mine is ann@example.com" },
-      { role: "user", content: [{ type: "text", text: "ssn 123-45-6789" }, { type: "image_url", image_url: { url: "x" } }] },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "ssn 123-45-6789" },
+          { type: "image_url", image_url: { url: "x" } },
+        ],
+      },
     ];
     const copy = structuredClone(input);
     const r = redactMessages(input, ALL);
@@ -60,14 +83,23 @@ const policy: Policy = {
   redaction: { mode: "off", detectors: [] },
   defaultToolAction: "allow",
   tools: [
-    { tool: "refund", action: "require_approval", when: [{ arg: "amount", op: "gt", value: 100 }], reason: "large refund" },
+    {
+      tool: "refund",
+      action: "require_approval",
+      when: [{ arg: "amount", op: "gt", value: 100 }],
+      reason: "large refund",
+    },
     { tool: "refund", action: "allow" },
     { tool: "delete_*", action: "deny", reason: "destructive" },
     { tool: "send_email", action: "deny", when: [{ arg: "to", op: "matches", value: "@(?!corp\\.com)" }] },
   ],
 };
 
-const call = (name: string, args: Record<string, unknown> = {}, argsValid = true): ToolCall => ({ name, args, argsValid });
+const call = (name: string, args: Record<string, unknown> = {}, argsValid = true): ToolCall => ({
+  name,
+  args,
+  argsValid,
+});
 
 describe("tool policy", () => {
   it("uses the first matching rule", () => {
@@ -90,10 +122,61 @@ describe("tool policy", () => {
     assert.equal(decideToolCall({ ...policy, defaultToolAction: "deny" }, call("unknown")).action, "deny");
   });
 
-  it("does not let malformed arguments match a conditional rule", () => {
-    const d = decideToolCall(policy, call("refund", {}, false));
-    assert.equal(d.action, "allow");
-    assert.equal(d.ruleIndex, 1);
+  it("fails closed when arguments cannot be judged", () => {
+    // Broken JSON, a missing amount and a text amount all meet the strict refund rule, not the permissive one.
+    assert.equal(decideToolCall(policy, call("refund", {}, false)).action, "require_approval");
+    assert.equal(decideToolCall(policy, call("refund", {})).action, "require_approval");
+    assert.equal(decideToolCall(policy, call("refund", { amount: "a lot" })).action, "require_approval");
+    assert.equal(decideToolCall(policy, call("refund", { amount: null })).action, "require_approval");
+    assert.equal(decideToolCall(policy, call("refund", { amount: "20" })).action, "allow");
+  });
+
+  it("never lets an unknown condition satisfy an allow rule", () => {
+    const allowOnly: Policy = {
+      ...policy,
+      defaultToolAction: "deny",
+      tools: [{ tool: "lookup", action: "allow", when: [{ arg: "id", op: "equals", value: "1" }] }],
+    };
+    assert.equal(decideToolCall(allowOnly, call("lookup", { id: 1 })).action, "allow");
+    assert.equal(decideToolCall(allowOnly, call("lookup", {})).action, "deny");
+    assert.equal(decideToolCall(allowOnly, call("lookup", { id: 1 }, false)).action, "deny");
+  });
+
+  it("matches tool names without regard to case", () => {
+    assert.equal(decideToolCall(policy, call("DELETE_Customer")).action, "deny");
+    assert.equal(decideToolCall(policy, call("Refund", { amount: 500 })).action, "require_approval");
+  });
+
+  it("does not read inherited properties from arguments", () => {
+    const p: Policy = {
+      ...policy,
+      tools: [
+        { tool: "x", action: "deny", when: [{ arg: "__proto__.polluted", op: "equals", value: "1" }] },
+        { tool: "x", action: "allow" },
+      ],
+      defaultToolAction: "allow",
+    };
+    // The condition is unknown (the path is refused), and an unknown condition meets a deny rule.
+    assert.equal(decideToolCall(p, call("x", {})).action, "deny");
+    assert.equal(
+      decideToolCall(
+        { ...p, tools: [{ tool: "x", action: "deny", when: [{ arg: "constructor", op: "equals", value: "x" }] }] },
+        call("x", {}),
+      ).action,
+      "deny",
+    );
+  });
+
+  it("survives a regular expression that would backtrack forever", () => {
+    const evil: Policy = {
+      ...policy,
+      defaultToolAction: "allow",
+      tools: [{ tool: "fetch", action: "deny", when: [{ arg: "url", op: "matches", value: "^(a+)+$" }] }],
+    };
+    const started = performance.now();
+    const d = decideToolCall(evil, call("fetch", { url: "a".repeat(60) + "!" }));
+    assert.ok(performance.now() - started < 1000, "must give up quickly");
+    assert.equal(d.action, "deny", "a timed-out pattern counts as unknown, which meets a deny rule");
   });
 
   it("takes the strictest decision overall", () => {
@@ -109,9 +192,17 @@ describe("tool policy", () => {
 describe("tool call extraction", () => {
   it("reads calls from a completion body", () => {
     const body = {
-      choices: [{ message: { tool_calls: [{ id: "c1", type: "function", function: { name: "refund", arguments: '{"amount":5}' } }] } }],
+      choices: [
+        {
+          message: {
+            tool_calls: [{ id: "c1", type: "function", function: { name: "refund", arguments: '{"amount":5}' } }],
+          },
+        },
+      ],
     };
-    assert.deepEqual(toolCallsFromCompletion(body), [{ id: "c1", name: "refund", args: { amount: 5 }, argsValid: true }]);
+    assert.deepEqual(toolCallsFromCompletion(body), [
+      { id: "c1", name: "refund", args: { amount: 5 }, argsValid: true },
+    ]);
   });
 
   it("flags invalid argument JSON", () => {

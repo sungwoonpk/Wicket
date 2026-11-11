@@ -21,8 +21,8 @@ same gateway runs against three backends without code changes:
 3. **A real provider** through an OpenAI-compatible endpoint, enabled by setting the base URL
    and a key.
 
-Provider-specific formats (for example the Anthropic Messages API) are added later as
-adapters that translate to and from this wire format. They are not part of the MVP.
+Provider-specific formats, such as the Anthropic Messages API, are handled by adapters that translate to and from
+this wire format. See [0007](0007-providers-and-routing.md).
 
 ## Costs
 

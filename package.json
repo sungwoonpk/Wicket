@@ -8,17 +8,30 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/gateway/dashboard.html dist/src/gateway/",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -r src/gateway/dashboard dist/src/gateway/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "dev:mock": "tsx src/mock/main.ts",
     "dev": "tsx src/gateway/main.ts",
     "demo": "tsx scripts/demo.ts",
-    "bench": "tsx scripts/bench.ts"
+    "bench": "tsx scripts/bench.ts",
+    "test:ui": "tsx scripts/ui-smoke.ts",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-exclude=\"src/mock/main.ts\" --test-coverage-exclude=\"src/gateway/main.ts\" --test-coverage-lines=95 --test-coverage-functions=95 --test-coverage-branches=85 \"test/**/*.test.ts\"",
+    "start": "node dist/src/gateway/main.js",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm run test:coverage"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/node": "^22.10.0",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.72.2",
+    "yaml": "^2.9.1"
   }
 }

@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 const MIGRATIONS: string[] = [
   `
@@ -52,12 +52,61 @@ const MIGRATIONS: string[] = [
     doc TEXT NOT NULL
   );
   `,
+  `
+  ALTER TABLE agents ADD COLUMN max_concurrent INTEGER;
+  CREATE INDEX requests_at ON requests(at);
+  CREATE TABLE teams (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  INSERT OR IGNORE INTO teams (id, name, created_at) VALUES ('default', 'default', datetime('now'));
+  INSERT OR IGNORE INTO teams (id, name, created_at) SELECT DISTINCT team, team, datetime('now') FROM agents;
+  CREATE TABLE team_policies (
+    team TEXT PRIMARY KEY REFERENCES teams(id),
+    doc TEXT NOT NULL
+  );
+  CREATE TABLE admin_keys (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    team TEXT REFERENCES teams(id),
+    key_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    disabled INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE upstreams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    api_key_env TEXT,
+    models TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE budget_alerts (
+    agent_id TEXT NOT NULL,
+    month TEXT NOT NULL,
+    threshold INTEGER NOT NULL,
+    at TEXT NOT NULL,
+    PRIMARY KEY (agent_id, month, threshold)
+  );
+  CREATE TABLE audit_head (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    seq INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    mac TEXT NOT NULL
+  );
+  `,
 ];
 
 /** Opens the database and applies any migrations that have not run yet. */
 export function openDb(path = ":memory:"): DatabaseSync {
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+  // NORMAL is safe with WAL: a power cut can lose the last few commits but cannot corrupt the file.
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;");
+  reusePreparedStatements(db);
   const current = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
   for (let version = current; version < MIGRATIONS.length; version++) {
     db.exec("BEGIN");
@@ -71,4 +120,22 @@ export function openDb(path = ":memory:"): DatabaseSync {
     }
   }
   return db;
+}
+
+/**
+ * Compiling a statement costs more than running it, and the same few statements run on every request.
+ * This keeps each one after its first use. Statements are safe to reuse because the database is
+ * driven synchronously, so two never run at once.
+ */
+function reusePreparedStatements(db: DatabaseSync): void {
+  const cache = new Map<string, StatementSync>();
+  const prepare = db.prepare.bind(db);
+  (db as { prepare: (sql: string) => StatementSync }).prepare = (sql: string) => {
+    let statement = cache.get(sql);
+    if (!statement) {
+      statement = prepare(sql);
+      cache.set(sql, statement);
+    }
+    return statement;
+  };
 }
