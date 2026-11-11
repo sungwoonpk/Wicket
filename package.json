@@ -19,7 +19,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-exclude=\"src/mock/main.ts\" --test-coverage-exclude=\"src/gateway/main.ts\" --test-coverage-lines=85 --test-coverage-functions=85 --test-coverage-branches=75 \"test/**/*.test.ts\"",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-exclude=\"src/mock/main.ts\" --test-coverage-exclude=\"src/gateway/main.ts\" --test-coverage-lines=95 --test-coverage-functions=95 --test-coverage-branches=85 \"test/**/*.test.ts\"",
     "start": "node dist/src/gateway/main.js",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm run test:coverage"
   },
@@ -31,6 +31,7 @@
     "prettier": "^3.10.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "typescript-eslint": "^8.72.2"
+    "typescript-eslint": "^8.72.2",
+    "yaml": "^2.9.1"
   }
 }

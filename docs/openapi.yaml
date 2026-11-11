@@ -1,0 +1,515 @@
+openapi: 3.0.3
+info:
+  title: Wicket
+  version: 0.2.0
+  description: |
+    A gateway between AI agents and LLM providers. Agents call the OpenAI-compatible endpoint with a key
+    that Wicket issued. People manage the gateway through the admin API with an admin key.
+
+    Admin routes need a minimum role, shown as `x-min-role`. A role includes everything below it:
+    viewer, approver, admin, owner. A user limited to one team sees and changes only that team.
+servers:
+  - url: http://localhost:8080
+security:
+  - adminKey: []
+tags:
+  - name: Agent
+    description: Routes an agent calls with its own key.
+  - name: Admin
+    description: Routes people call with an admin key.
+  - name: Ops
+    description: Health, readiness and metrics.
+paths:
+  /healthz:
+    get:
+      tags: [Ops]
+      summary: Liveness check
+      security: []
+      responses:
+        "200": { description: The process is running. }
+  /readyz:
+    get:
+      tags: [Ops]
+      summary: Readiness check, which also touches the database
+      security: []
+      responses:
+        "200": { description: Ready to serve. }
+  /metrics:
+    get:
+      tags: [Ops]
+      summary: Prometheus metrics
+      x-min-role: viewer
+      responses:
+        "200": { description: Prometheus text format., content: { text/plain: { schema: { type: string } } } }
+  /dashboard:
+    get:
+      tags: [Ops]
+      summary: The admin dashboard (a single page app, served under a strict content security policy)
+      security: []
+      responses:
+        "200": { description: HTML. }
+  /v1/chat/completions:
+    post:
+      tags: [Agent]
+      summary: OpenAI-compatible chat completion, streamed or not
+      description: |
+        The gateway checks the agent's limits, applies the redaction and tool-call policy, routes the model
+        to a provider and returns the answer in OpenAI format. A tool call that needs a human is held and
+        the response is `202` with `wicket.approval_required`.
+      security: [{ agentKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatRequest" }
+      responses:
+        "200": { description: "A completion, or a stream of chunks when `stream` is true." }
+        "202":
+          description: A tool call is waiting for approval. Poll `poll_url`.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ApprovalRequired" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "504": { $ref: "#/components/responses/Error" }
+  /v1/approvals/{id}:
+    get:
+      tags: [Agent]
+      summary: Poll a held tool call
+      description: "`202` while pending. `200` with the original response once approved. `403` if denied."
+      security: [{ agentKey: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: "Approved. The original response, unchanged." }
+        "202": { description: Still pending. }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/me:
+    get:
+      tags: [Admin]
+      summary: Who am I calling as
+      x-min-role: viewer
+      responses:
+        "200":
+          {
+            description: The caller.,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { actor: { $ref: "#/components/schemas/Actor" } } } },
+              },
+          }
+        "401": { $ref: "#/components/responses/Error" }
+  /admin/teams:
+    get:
+      tags: [Admin]
+      summary: List teams
+      x-min-role: viewer
+      responses:
+        "200": { description: Teams the caller may see. }
+    post:
+      tags: [Admin]
+      summary: Create a team
+      x-min-role: owner
+      requestBody:
+        required: true
+        content:
+          {
+            application/json:
+              {
+                schema:
+                  {
+                    type: object,
+                    required: [id],
+                    properties: { id: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,39}$" }, name: { type: string } },
+                  },
+              },
+          }
+      responses:
+        "201": { description: Created. }
+        "409": { $ref: "#/components/responses/Error" }
+  /admin/teams/{id}:
+    patch:
+      tags: [Admin]
+      summary: Rename a team
+      x-min-role: owner
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } }
+      responses:
+        "200": { description: Renamed. }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/users:
+    get:
+      tags: [Admin]
+      summary: List admin users
+      x-min-role: owner
+      responses:
+        "200": { description: "Users, without key material." }
+    post:
+      tags: [Admin]
+      summary: Create an admin user and return its key once
+      x-min-role: owner
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, role]
+              properties:
+                name: { type: string }
+                role: { type: string, enum: [viewer, approver, admin, owner] }
+                team:
+                  { type: string, nullable: true, description: "Limit the user to one team, or null for all teams." }
+      responses:
+        "201": { description: Created. The key is shown once. }
+  /admin/users/{id}:
+    patch:
+      tags: [Admin]
+      summary: Disable or enable a user
+      x-min-role: owner
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          {
+            application/json:
+              { schema: { type: object, required: [disabled], properties: { disabled: { type: boolean } } } },
+          }
+      responses:
+        "200": { description: Updated. }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/agents:
+    get:
+      tags: [Admin]
+      summary: List agents with spend this month
+      x-min-role: viewer
+      parameters: [{ $ref: "#/components/parameters/Team" }]
+      responses:
+        "200": { description: Agents. }
+    post:
+      tags: [Admin]
+      summary: Create an agent and return its key once
+      x-min-role: admin
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentInput" } } }
+      responses:
+        "201": { description: Created. The key is shown once. }
+        "403": { $ref: "#/components/responses/Error" }
+  /admin/agents/{id}:
+    patch:
+      tags: [Admin]
+      summary: Change an agent's settings, or disable it
+      x-min-role: admin
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentInput" } } }
+      responses:
+        "200": { description: Updated. }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/agents/{id}/rotate-key:
+    post:
+      tags: [Admin]
+      summary: Replace an agent's key. The old key stops working at once.
+      x-min-role: admin
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: "The new key, shown once." }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/policy:
+    get:
+      tags: [Admin]
+      summary: Read the organization policy, or a team's with `?team=`
+      x-min-role: viewer
+      parameters: [{ $ref: "#/components/parameters/TeamQuery" }]
+      responses:
+        "200": { description: The policy. }
+    put:
+      tags: [Admin]
+      summary: Replace the organization policy (owner) or a team's policy (admin)
+      x-min-role: admin
+      parameters: [{ $ref: "#/components/parameters/TeamQuery" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Policy" } } }
+      responses:
+        "200": { description: Saved. }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [Admin]
+      summary: Remove a team's policy so it follows the organization again
+      x-min-role: admin
+      parameters: [{ name: team, in: query, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Removed. }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/policy/simulate:
+    post:
+      tags: [Admin]
+      summary: Judge a tool call or some text against a policy without running anything
+      description: Uses the `policy` in the body when given (an unsaved draft), otherwise the saved policy.
+      x-min-role: viewer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                policy: { $ref: "#/components/schemas/Policy" }
+                team: { type: string }
+                toolCall:
+                  {
+                    type: object,
+                    required: [name],
+                    properties: { name: { type: string }, args: { description: An object or a JSON string. } },
+                  }
+                text: { type: string, maxLength: 20000 }
+      responses:
+        "200": { description: The decision and the redaction preview. }
+        "400": { $ref: "#/components/responses/Error" }
+  /admin/requests:
+    get:
+      tags: [Admin]
+      summary: Recent requests
+      x-min-role: viewer
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Team" }
+        - { name: outcome, in: query, schema: { type: string } }
+        - { name: agent, in: query, schema: { type: string } }
+      responses:
+        "200": { description: "Requests, newest first." }
+  /admin/summary:
+    get:
+      tags: [Admin]
+      summary: Totals for the dashboard
+      x-min-role: viewer
+      parameters: [{ $ref: "#/components/parameters/Team" }]
+      responses:
+        "200": { description: Totals. }
+  /admin/timeseries:
+    get:
+      tags: [Admin]
+      summary: Requests and spend per hour
+      x-min-role: viewer
+      parameters:
+        - { name: hours, in: query, schema: { type: integer, minimum: 1, maximum: 168, default: 24 } }
+        - { $ref: "#/components/parameters/Team" }
+      responses:
+        "200": { description: "One bucket per hour, oldest first, empty hours included." }
+  /admin/approvals:
+    get:
+      tags: [Admin]
+      summary: Held tool calls
+      x-min-role: viewer
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, approved, denied] } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Team" }
+      responses:
+        "200": { description: Approvals. }
+  /admin/approvals/{id}/approve:
+    post:
+      tags: [Admin]
+      summary: Approve a held tool call
+      x-min-role: approver
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Approved. }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /admin/approvals/{id}/deny:
+    post:
+      tags: [Admin]
+      summary: Deny a held tool call
+      x-min-role: approver
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Denied. }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /admin/audit:
+    get:
+      tags: [Admin]
+      summary: The audit trail. Needs access to all teams.
+      x-min-role: viewer
+      parameters: [{ $ref: "#/components/parameters/Limit" }]
+      responses:
+        "200": { description: "Events, newest first." }
+        "403": { $ref: "#/components/responses/Error" }
+  /admin/audit/verify:
+    get:
+      tags: [Admin]
+      summary: Check the hash chain and the signed head. Needs access to all teams.
+      x-min-role: viewer
+      responses:
+        "200":
+          {
+            description: The result.,
+            content: { application/json: { schema: { $ref: "#/components/schemas/VerifyResult" } } },
+          }
+  /admin/upstreams:
+    get:
+      tags: [Admin]
+      summary: List providers
+      x-min-role: admin
+      responses:
+        "200": { description: Providers and the default upstream. }
+    post:
+      tags: [Admin]
+      summary: Register a provider. Cloud metadata addresses are refused.
+      x-min-role: owner
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, kind, baseUrl, models]
+              properties:
+                name: { type: string }
+                kind: { type: string, enum: [openai, anthropic] }
+                baseUrl: { type: string, format: uri }
+                apiKeyEnv:
+                  {
+                    type: string,
+                    description: Name of the environment variable that holds the key. The key is never stored.,
+                  }
+                models:
+                  { type: array, items: { type: string }, description: "Model name patterns, with * as a wildcard." }
+      responses:
+        "201": { description: Registered. }
+        "400": { $ref: "#/components/responses/Error" }
+  /admin/upstreams/{id}:
+    patch:
+      tags: [Admin]
+      summary: Turn a provider on or off
+      x-min-role: owner
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          {
+            application/json:
+              { schema: { type: object, required: [enabled], properties: { enabled: { type: boolean } } } },
+          }
+      responses:
+        "200": { description: Updated. }
+    delete:
+      tags: [Admin]
+      summary: Delete a provider
+      x-min-role: owner
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Deleted. }
+        "404": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    agentKey: { type: http, scheme: bearer, description: "An agent key, starting with wk_." }
+    adminKey:
+      {
+        type: http,
+        scheme: bearer,
+        description: "The environment admin token, or an admin user key starting with wa_.",
+      }
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
+    Team:
+      {
+        name: team,
+        in: query,
+        description: "Only for users with access to all teams: show one team.",
+        schema: { type: string },
+      }
+    TeamQuery:
+      { name: team, in: query, description: "A team id. Omit for the organization policy.", schema: { type: string } }
+  responses:
+    Error:
+      description: An error. Every error body has the same shape and carries the request id.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message: { type: string }
+            type: { type: string, example: policy_violation }
+            request_id: { type: string }
+    Actor:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        role: { type: string, enum: [viewer, approver, admin, owner] }
+        team: { type: string, nullable: true }
+    ChatRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model: { type: string, description: 1 to 200 characters from letters, digits and . _: / @ + - }
+        messages: { type: array, minItems: 1, items: { type: object, required: [role] } }
+        stream: { type: boolean }
+        tools: { type: array, items: { type: object } }
+    ApprovalRequired:
+      type: object
+      properties:
+        object: { type: string, enum: [wicket.approval_required] }
+        approval_id: { type: string }
+        status: { type: string, enum: [pending] }
+        tool_calls:
+          { type: array, items: { type: object, properties: { name: { type: string }, reason: { type: string } } } }
+        poll_url: { type: string }
+    AgentInput:
+      type: object
+      properties:
+        name: { type: string }
+        team: { type: string }
+        disabled: { type: boolean }
+        allowedModels: { type: array, nullable: true, items: { type: string } }
+        monthlyBudgetUsd: { type: number, nullable: true, minimum: 0 }
+        ratePerMinute: { type: integer, nullable: true, minimum: 1 }
+        maxConcurrent: { type: integer, nullable: true, minimum: 1 }
+    Condition:
+      type: object
+      required: [arg, op, value]
+      properties:
+        arg: { type: string, description: Dot path into the tool arguments. }
+        op: { type: string, enum: [equals, contains, matches, gt, lt] }
+        value: { oneOf: [{ type: string }, { type: number }] }
+    ToolRule:
+      type: object
+      required: [tool, action]
+      properties:
+        tool: { type: string, description: "Tool name, with * as a wildcard. Matched without regard to case." }
+        action: { type: string, enum: [allow, deny, require_approval] }
+        when: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+        reason: { type: string }
+    Policy:
+      type: object
+      properties:
+        redaction:
+          type: object
+          properties:
+            mode: { type: string, enum: [off, redact, block] }
+            detectors: { type: array, items: { type: string, enum: [email, ssn, credit_card, phone, api_key] } }
+        tools: { type: array, items: { $ref: "#/components/schemas/ToolRule" } }
+        defaultToolAction: { type: string, enum: [allow, deny, require_approval] }
+    VerifyResult:
+      type: object
+      properties:
+        ok: { type: boolean }
+        checked: { type: integer }
+        brokenAt: { type: integer }
+        reason: { type: string }

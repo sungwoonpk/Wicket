@@ -574,6 +574,9 @@ const routes: Route[] = [
   },
 ];
 
+/** How many operations the admin API has. A test compares this with the OpenAPI file so the two cannot drift apart. */
+export const ADMIN_OPERATION_COUNT = routes.length;
+
 /**
  * Handles `/admin/*` and `/metrics`. Returns false when the path is not one of them, so the caller can move on.
  * Roles and team limits are checked here, once, before any handler runs.
