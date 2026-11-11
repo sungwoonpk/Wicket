@@ -8,7 +8,7 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp -r src/gateway/dashboard dist/src/gateway/",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -r src/gateway/dashboard dist/src/gateway/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "dev:mock": "tsx src/mock/main.ts",

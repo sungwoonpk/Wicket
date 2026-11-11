@@ -109,7 +109,10 @@ describe("OpenAPI file", () => {
     const walk = (node: unknown) => {
       if (Array.isArray(node)) node.forEach(walk);
       else if (node && typeof node === "object") {
-        for (const [k, v] of Object.entries(node)) k === "$ref" ? refs.push(v as string) : walk(v);
+        for (const [k, v] of Object.entries(node)) {
+          if (k === "$ref") refs.push(v as string);
+          else walk(v);
+        }
       }
     };
     walk(spec);

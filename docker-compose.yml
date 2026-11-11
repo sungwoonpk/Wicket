@@ -1,0 +1,35 @@
+# A local setup: the gateway, a mock upstream to talk to, and a volume that keeps the database.
+#
+#   export WICKET_ADMIN_TOKEN=$(openssl rand -hex 24)
+#   export WICKET_AUDIT_KEY=$(openssl rand -hex 24)
+#   docker compose up --build
+#
+# Open http://localhost:8080/dashboard and sign in with WICKET_ADMIN_TOKEN.
+# To use a real model server instead of the mock, set WICKET_UPSTREAM_URL, for example to a local Ollama.
+services:
+  wicket:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      WICKET_ADMIN_TOKEN: ${WICKET_ADMIN_TOKEN:?set WICKET_ADMIN_TOKEN to a long random string}
+      WICKET_AUDIT_KEY: ${WICKET_AUDIT_KEY:?set WICKET_AUDIT_KEY to a different long random string}
+      WICKET_UPSTREAM_URL: ${WICKET_UPSTREAM_URL:-http://mock:4010}
+    volumes:
+      - wicket-data:/data
+    depends_on:
+      - mock
+    restart: unless-stopped
+
+  mock:
+    build: .
+    command: ["node", "dist/src/mock/main.js"]
+    environment:
+      MOCK_PORT: "4010"
+    expose:
+      - "4010"
+    healthcheck:
+      disable: true
+
+volumes:
+  wicket-data:

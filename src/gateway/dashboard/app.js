@@ -2340,44 +2340,42 @@
     refs.nav = nav;
     refs.badge = badge;
 
-    document
-      .getElementById("root")
-      .replaceChildren(
+    document.getElementById("root").replaceChildren(
+      h(
+        "div",
+        { class: "shell" },
         h(
-          "div",
-          { class: "shell" },
-          h(
-            "aside",
-            { class: "sidebar" },
-            h(
-              "div",
-              { class: "brand" },
-              h("span", { class: "brand-mark" }, icon("logo")),
-              h("span", { class: "name", text: "Wicket" }),
-            ),
-            nav,
-            h("div", { class: "sidebar-foot", text: "Gateway for AI agents" }),
-          ),
+          "aside",
+          { class: "sidebar" },
           h(
             "div",
-            { class: "main" },
-            h(
-              "header",
-              { class: "topbar" },
-              refs.title,
-              teamSelect,
-              refs.updated,
-              h("span", {
-                class: "chip",
-                text: state.me.role + (state.me.team ? " · " + state.me.team : "") + " · " + state.me.name,
-              }),
-              themeBtn,
-              h("button", { class: "btn", type: "button", text: "Sign out", on: { click: () => signOut("") } }),
-            ),
-            refs.content,
+            { class: "brand" },
+            h("span", { class: "brand-mark" }, icon("logo")),
+            h("span", { class: "name", text: "Wicket" }),
           ),
+          nav,
+          h("div", { class: "sidebar-foot", text: "Gateway for AI agents" }),
         ),
-      );
+        h(
+          "div",
+          { class: "main" },
+          h(
+            "header",
+            { class: "topbar" },
+            refs.title,
+            teamSelect,
+            refs.updated,
+            h("span", {
+              class: "chip",
+              text: state.me.role + (state.me.team ? " · " + state.me.team : "") + " · " + state.me.name,
+            }),
+            themeBtn,
+            h("button", { class: "btn", type: "button", text: "Sign out", on: { click: () => signOut("") } }),
+          ),
+          refs.content,
+        ),
+      ),
+    );
   }
 
   function renderLogin(message) {
