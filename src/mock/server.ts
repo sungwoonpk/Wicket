@@ -89,6 +89,8 @@ function scenarioFor(messages: ChatMessage[]): Scenario {
   if (slow) s.slowMs = Math.min(Number(slow[1]), 30_000);
   const say = /\[\[say:([^\]]*)\]\]/.exec(text);
   if (say) s.say = say[1];
+  // A reply that carries personal data, without the request carrying any, so response scanning can be tested alone.
+  if (/\[\[leak\]\]/.test(text)) s.say = "You can reach ann@example.com or 123-45-6789";
   return s;
 }
 
