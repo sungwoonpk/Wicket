@@ -54,6 +54,7 @@ const MIGRATIONS: string[] = [
   `,
   `
   ALTER TABLE agents ADD COLUMN max_concurrent INTEGER;
+  CREATE INDEX requests_at ON requests(at);
   CREATE TABLE teams (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,

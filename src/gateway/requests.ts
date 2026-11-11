@@ -97,7 +97,7 @@ export class RequestStore {
       .prepare(
         `SELECT r.*, a.name AS agent_name FROM requests r LEFT JOIN agents a ON a.id = r.agent_id
          WHERE (? IS NULL OR a.team = ?) AND (? IS NULL OR r.outcome = ?) AND (? IS NULL OR r.agent_id = ?)
-         ORDER BY r.id DESC LIMIT ?`,
+         ORDER BY r.at DESC, r.id DESC LIMIT ?`,
       )
       .all(team, team, filter.outcome ?? null, filter.outcome ?? null, filter.agentId ?? null, filter.agentId ?? null, limit)
       .map(fromRow);

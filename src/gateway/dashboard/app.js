@@ -67,6 +67,11 @@
 
   const usd = (n) => "$" + (n === 0 ? "0.00" : n < 1 ? n.toFixed(4) : n.toFixed(2));
   const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  /** The time of day for today, and the date as well for anything older. */
+  function when(iso) {
+    const d = new Date(iso);
+    return d.toDateString() === new Date().toDateString() ? clock(iso) : stamp(iso);
+  }
   const stamp = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   function ago(iso) {
     const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -378,7 +383,7 @@
         tools: h("button", { class: "btn small", type: "button", text: "View all", on: { click: () => go("requests") } }),
         body: table(
           [{ label: "Time" }, { label: "Agent" }, { label: "Model" }, { label: "Outcome" }, { label: "Cost", num: true }],
-          recent.requests.map((r) => h("tr", {}, h("td", { class: "mono muted", text: clock(r.at) }), h("td", { text: r.agentName || r.agentId }), h("td", { text: r.model || "-" }), h("td", {}, pill(r.outcome)), h("td", { class: "num", text: usd(r.costUsd) }))),
+          recent.requests.map((r) => h("tr", {}, h("td", { class: "mono muted", text: when(r.at) }), h("td", { text: r.agentName || r.agentId }), h("td", { text: r.model || "-" }), h("td", {}, pill(r.outcome)), h("td", { class: "num", text: usd(r.costUsd) }))),
           empty("No requests yet", "Point an agent at this gateway and its calls show up here."),
         ),
       });
@@ -670,7 +675,7 @@
       const tools = h("div", {},
         rulesBox,
         h("button", { class: "btn", type: "button", text: "Add rule", disabled: locked, on: { click: () => { draft.tools.push({ tool: "", action: "require_approval", reason: "", when: [] }); drawRules(); syncButtons(); } } }),
-        h("div", { class: "mt" }, field("When no rule matches", selectOf(ACTIONS, draft.defaultToolAction, { disabled: locked, on: { change: (e) => { draft.defaultToolAction = e.target.value; syncButtons(); } } }), "Rules run top to bottom and the first match wins.")));
+        h("div", { class: "mt narrow" }, field("When no rule matches", selectOf(ACTIONS, draft.defaultToolAction, { disabled: locked, on: { change: (e) => { draft.defaultToolAction = e.target.value; syncButtons(); } } }), "Rules run top to bottom and the first match wins.")));
 
       // The tester judges the draft on screen, saved or not.
       const testTool = h("input", { type: "text", value: "refund", "aria-label": "Tool name to test" });
@@ -741,7 +746,7 @@
       const { requests } = await api(scoped("/admin/requests?" + params));
       body.replaceChildren(table(
         [{ label: "Time" }, { label: "Agent" }, { label: "Model" }, { label: "Outcome" }, { label: "Status", num: true }, { label: "Tokens", num: true }, { label: "Cost", num: true }, { label: "Latency", num: true }],
-        requests.map((r) => h("tr", {}, h("td", { class: "mono muted", text: clock(r.at) }), h("td", { text: r.agentName || r.agentId }), h("td", { text: r.model || "-" }), h("td", {}, pill(r.outcome)),
+        requests.map((r) => h("tr", {}, h("td", { class: "mono muted", text: when(r.at) }), h("td", { text: r.agentName || r.agentId }), h("td", { text: r.model || "-" }), h("td", {}, pill(r.outcome)),
           h("td", { class: "num", text: r.status }), h("td", { class: "num", text: (r.promptTokens || 0) + (r.completionTokens || 0) }), h("td", { class: "num", text: usd(r.costUsd) }), h("td", { class: "num", text: r.latencyMs + " ms" }))),
         empty("No matching requests", f.outcome || f.agent ? "Try a different filter." : "Calls through the gateway are listed here.")));
     }
@@ -761,7 +766,8 @@
     const status = h("div", { class: "status-line" });
     const list = h("div", {});
     async function draw() {
-      const [verify, { events }] = await Promise.all([api("/admin/audit/verify"), api("/admin/audit?limit=100")]);
+      const [verify, { events }, { agents }] = await Promise.all([api("/admin/audit/verify"), api("/admin/audit?limit=100"), api("/admin/agents")]);
+      const names = Object.fromEntries(agents.map((a) => [a.id, a.name + " (" + a.team + ")"]));
       status.replaceChildren(
         verify.ok ? h("span", { class: "pill ok", text: "Chain intact" }) : h("span", { class: "pill bad", text: "Chain broken" }),
         verify.ok ? h("span", { class: "muted", text: verify.checked + " events checked, and the signed head matches the newest one." }) : h("span", { text: verify.reason + (verify.brokenAt ? " (event #" + verify.brokenAt + ")" : "") }),
@@ -772,7 +778,7 @@
         rows.push(h("tr", { class: "expandable", tabindex: "0", "aria-expanded": "false", on: {
           click: (ev) => { detail.hidden = !detail.hidden; ev.currentTarget.setAttribute("aria-expanded", String(!detail.hidden)); },
           keydown: (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.currentTarget.click(); } },
-        } }, h("td", { class: "mono muted", text: e.seq }), h("td", { class: "muted", text: stamp(e.at) }), h("td", {}, h("code", { text: e.type })), h("td", { text: e.actor }), h("td", { class: "mono muted", text: e.hash.slice(0, 12) })));
+        } }, h("td", { class: "mono muted", text: e.seq }), h("td", { class: "muted", text: stamp(e.at) }), h("td", {}, h("code", { text: e.type })), h("td", { text: names[e.actor] || e.actor }), h("td", { class: "mono muted", text: e.hash.slice(0, 12) })));
         rows.push(detail);
       }
       list.replaceChildren(table([{ label: "#" }, { label: "Time" }, { label: "Event" }, { label: "Actor" }, { label: "Hash" }], rows, empty("No events yet", "Changes and decisions are recorded here.")));

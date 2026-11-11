@@ -433,7 +433,7 @@ describe("migrations", () => {
     try {
       const path = join(dir, "w.db");
       const db = openDb(path);
-      db.exec("PRAGMA user_version = 1; DROP TABLE teams; DROP TABLE team_policies; DROP TABLE admin_keys; DROP TABLE upstreams; DROP TABLE budget_alerts; DROP TABLE audit_head;");
+      db.exec("PRAGMA user_version = 1; DROP TABLE teams; DROP TABLE team_policies; DROP TABLE admin_keys; DROP TABLE upstreams; DROP TABLE budget_alerts; DROP TABLE audit_head; DROP INDEX requests_at;");
       db.exec("ALTER TABLE agents DROP COLUMN max_concurrent");
       db.prepare("INSERT INTO agents (id, name, team, key_hash, created_at) VALUES ('agent_old', 'old', 'legacy', 'h', '2026-01-01')").run();
       db.close();
