@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { expiryFrom } from "./keylife.js";
 
 export type Role = "viewer" | "approver" | "admin" | "owner";
 export const ROLES: Role[] = ["viewer", "approver", "admin", "owner"];
@@ -18,6 +19,8 @@ export interface Actor {
 export interface AdminKey extends Actor {
   createdAt: string;
   disabled: boolean;
+  /** When the key stops working, or null for one that never expires. */
+  expiresAt: string | null;
 }
 
 /** The environment token. It always works and is always an owner, so a locked-out instance can recover. */
@@ -35,18 +38,24 @@ function fromRow(row: any): AdminKey {
     team: row.team ?? null,
     createdAt: row.created_at,
     disabled: row.disabled === 1,
+    expiresAt: row.expires_at ?? null,
   };
 }
 
 export class AdminKeyStore {
   constructor(private readonly db: DatabaseSync) {}
 
-  create(input: { name: string; role: Role; team: string | null }): { adminKey: AdminKey; key: string } {
+  create(input: { name: string; role: Role; team: string | null; keyTtlDays?: number | null }): {
+    adminKey: AdminKey;
+    key: string;
+  } {
     const key = `wa_${randomBytes(24).toString("base64url")}`;
     const id = `admin_${randomBytes(6).toString("hex")}`;
     this.db
-      .prepare("INSERT INTO admin_keys (id, name, role, team, key_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(id, input.name, input.role, input.team, hash(key), new Date().toISOString());
+      .prepare(
+        "INSERT INTO admin_keys (id, name, role, team, key_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(id, input.name, input.role, input.team, hash(key), new Date().toISOString(), expiryFrom(input.keyTtlDays));
     return { adminKey: this.get(id)!, key };
   }
 

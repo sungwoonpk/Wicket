@@ -166,6 +166,14 @@ paths:
                 role: { type: string, enum: [viewer, approver, admin, owner] }
                 team:
                   { type: string, nullable: true, description: "Limit the user to one team, or null for all teams." }
+                keyTtlDays:
+                  {
+                    type: integer,
+                    nullable: true,
+                    minimum: 1,
+                    maximum: 3650,
+                    description: "How many days the key lasts. Leave it out for a key that never expires.",
+                  }
       responses:
         "201": { description: Created. The key is shown once. }
   /admin/users/{id}:
@@ -218,8 +226,17 @@ paths:
     post:
       tags: [Admin]
       summary: Replace an agent's key. The old key stops working at once.
+      description: The new key lasts as long as the old one was meant to, counted from now. Send `keyTtlDays` to choose another lifetime, or null for none.
       x-min-role: admin
       parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                keyTtlDays: { type: integer, nullable: true, minimum: 1, maximum: 3650 }
       responses:
         "200": { description: "The new key, shown once." }
         "404": { $ref: "#/components/responses/Error" }
@@ -255,7 +272,7 @@ paths:
     post:
       tags: [Admin]
       summary: Judge a tool call or some text against a policy without running anything
-      description: Uses the `policy` in the body when given (an unsaved draft), otherwise the saved policy.
+      description: Uses the `policy` in the body when given (an unsaved draft), otherwise the effective policy of `team`, otherwise the organization policy. Naming a team needs access to that team, and a user limited to one team who names none gets their own team's policy.
       x-min-role: viewer
       requestBody:
         required: true
@@ -481,6 +498,12 @@ components:
         monthlyBudgetUsd: { type: number, nullable: true, minimum: 0 }
         ratePerMinute: { type: integer, nullable: true, minimum: 1 }
         maxConcurrent: { type: integer, nullable: true, minimum: 1 }
+        keyTtlDays:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 3650
+          description: "How many days the agent's key lasts, counted from now. Null for a key that never expires. Leave it out to keep the current expiry."
     Condition:
       type: object
       required: [arg, op, value]

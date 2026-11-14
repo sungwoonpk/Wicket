@@ -513,15 +513,39 @@ describe("migrations", () => {
       db.exec(
         "PRAGMA user_version = 1; DROP TABLE teams; DROP TABLE team_policies; DROP TABLE admin_keys; DROP TABLE upstreams; DROP TABLE budget_alerts; DROP TABLE audit_head; DROP INDEX requests_at;",
       );
+      db.exec("ALTER TABLE agents DROP COLUMN key_ttl_days; ALTER TABLE agents DROP COLUMN key_expires_at");
       db.exec("ALTER TABLE agents DROP COLUMN max_concurrent");
       db.prepare(
         "INSERT INTO agents (id, name, team, key_hash, created_at) VALUES ('agent_old', 'old', 'legacy', 'h', '2026-01-01')",
       ).run();
       db.close();
       const upgraded = openDb(path);
-      assert.equal((upgraded.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 2);
+      assert.equal((upgraded.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 3);
       assert.ok(new TeamStore(upgraded).get("legacy"), "a team is created for each team an existing agent used");
       assert.equal(new AgentStore(upgraded).get("agent_old")?.maxConcurrent, null);
+      upgraded.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("brings a version 2 database forward, and its keys keep working without an expiry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wicket-"));
+    try {
+      const path = join(dir, "w.db");
+      const db = openDb(path);
+      const created = new AgentStore(db).create({ name: "old-key" });
+      const admin = new AdminKeyStore(db).create({ name: "old-admin", role: "viewer", team: null });
+      db.exec("PRAGMA user_version = 2");
+      db.exec("ALTER TABLE agents DROP COLUMN key_ttl_days; ALTER TABLE agents DROP COLUMN key_expires_at");
+      db.exec("ALTER TABLE admin_keys DROP COLUMN expires_at");
+      db.close();
+      const upgraded = openDb(path);
+      assert.equal((upgraded.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 3);
+      const agent = new AgentStore(upgraded).authenticate(created.key);
+      assert.equal(agent?.keyExpiresAt, null);
+      assert.equal(agent?.keyTtlDays, null);
+      assert.equal(new AdminKeyStore(upgraded).authenticate(admin.key)?.expiresAt, null);
       upgraded.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { type Actor, BOOTSTRAP_ACTOR, ROLE_LEVEL, ROLES, type Role } from "./adminkeys.js";
 import type { AgentChanges } from "./agents.js";
 import { clampLimit, clientIp, HttpError, bearer, parseJsonObject, readBody, safeEqual, sendJson } from "./http.js";
+import { keyExpired } from "./keylife.js";
 import { renderMetrics } from "./metrics.js";
 import { PolicyError, parsePolicy } from "./policystore.js";
 import type { Services } from "./services.js";
@@ -39,14 +40,15 @@ function authenticateAdmin(svc: Services, req: IncomingMessage): Actor {
   if (token) {
     if (safeEqual(token, svc.options.adminToken)) return BOOTSTRAP_ACTOR;
     const key = svc.adminKeys.authenticate(token);
-    if (key) return { id: key.id, name: key.name, role: key.role, team: key.team };
+    if (key && !keyExpired(key.expiresAt)) return { id: key.id, name: key.name, role: key.role, team: key.team };
+    if (key) svc.log({ event: "auth.admin_key_expired", userId: key.id, expiredAt: key.expiresAt });
   }
   const wait = svc.authFailures.take(`admin:${clientIp(req)}`, 10);
   if (wait > 0)
     throw new HttpError(429, "too many failed attempts, try again later", "rate_limit_error", {
       "retry-after": String(wait),
     });
-  throw new HttpError(401, "invalid admin token", "authentication_error");
+  throw new HttpError(401, "invalid or expired admin token", "authentication_error");
 }
 
 /** The team a list should be limited to: the actor's own team, or the `?team=` filter for someone with access to all. */
@@ -65,14 +67,28 @@ function requireAllTeams(actor: Actor): void {
   if (actor.team !== null) throw new HttpError(403, "this needs access to all teams", "permission_error");
 }
 
-function optionalNumber(value: unknown, field: string, { min = 0, integer = false } = {}): number | null | undefined {
+function optionalNumber(
+  value: unknown,
+  field: string,
+  { min = 0, max = Infinity, integer = false } = {},
+): number | null | undefined {
   if (value === undefined) return undefined;
   if (value === null) return null;
-  if (typeof value !== "number" || !Number.isFinite(value) || value < min || (integer && !Number.isInteger(value))) {
-    throw new HttpError(400, `${field} must be ${integer ? "an integer" : "a number"} of at least ${min}, or null`);
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < min ||
+    value > max ||
+    (integer && !Number.isInteger(value))
+  ) {
+    const range = max === Infinity ? `at least ${min}` : `from ${min} to ${max}`;
+    throw new HttpError(400, `${field} must be ${integer ? "an integer" : "a number"} ${range}, or null`);
   }
   return value;
 }
+
+/** How many days a key may live: a whole number from 1 to ten years, or null for no expiry. */
+const KEY_TTL = { min: 1, max: 3650, integer: true };
 
 function requireName(value: unknown, field = "name"): string {
   if (typeof value !== "string" || value.trim() === "" || value.length > 100)
@@ -111,6 +127,8 @@ function parseAgentSettings(body: Body): AgentChanges {
   if (rate !== undefined) out.ratePerMinute = rate;
   const concurrent = optionalNumber(body.maxConcurrent, "maxConcurrent", { min: 1, integer: true });
   if (concurrent !== undefined) out.maxConcurrent = concurrent;
+  const ttl = optionalNumber(body.keyTtlDays, "keyTtlDays", KEY_TTL);
+  if (ttl !== undefined) out.keyTtlDays = ttl;
   return out;
 }
 
@@ -184,8 +202,15 @@ const routes: Route[] = [
       const team = body.team === undefined || body.team === null ? null : body.team;
       if (team !== null && !isTeamSlug(team)) throw new HttpError(400, "team must be a team id, or null for all teams");
       if (team !== null && !c.svc.teams.get(team)) throw new HttpError(404, "team not found");
-      const { adminKey, key } = c.svc.adminKeys.create({ name, role: body.role, team });
-      c.svc.audit.append("user.created", label(c.actor), { userId: adminKey.id, name, role: body.role, team });
+      const keyTtlDays = optionalNumber(body.keyTtlDays, "keyTtlDays", KEY_TTL);
+      const { adminKey, key } = c.svc.adminKeys.create({ name, role: body.role, team, keyTtlDays });
+      c.svc.audit.append("user.created", label(c.actor), {
+        userId: adminKey.id,
+        name,
+        role: body.role,
+        team,
+        keyExpiresAt: adminKey.expiresAt,
+      });
       json(c, 201, { user: adminKey, key });
     },
   },
@@ -234,8 +259,14 @@ const routes: Route[] = [
         monthlyBudgetUsd: settings.monthlyBudgetUsd,
         ratePerMinute: settings.ratePerMinute,
         maxConcurrent: settings.maxConcurrent,
+        keyTtlDays: settings.keyTtlDays,
       });
-      c.svc.audit.append("agent.created", label(c.actor), { agentId: agent.id, name: agent.name, team: agent.team });
+      c.svc.audit.append("agent.created", label(c.actor), {
+        agentId: agent.id,
+        name: agent.name,
+        team: agent.team,
+        keyExpiresAt: agent.keyExpiresAt,
+      });
       json(c, 201, { agent, key });
     },
   },
@@ -261,12 +292,17 @@ const routes: Route[] = [
     method: "POST",
     pattern: /^\/admin\/agents\/([\w-]+)\/rotate-key$/,
     role: "admin",
-    handler: (c) => {
+    handler: async (c) => {
       const current = c.svc.agents.get(c.params[0]!);
       if (!current) throw new HttpError(404, "agent not found");
       requireTeamAccess(c.actor, current.team);
-      const rotated = c.svc.agents.rotateKey(current.id)!;
-      c.svc.audit.append("agent.key_rotated", label(c.actor), { agentId: current.id });
+      // The new key lasts as long as the old one was meant to, unless the request names another lifetime.
+      const ttl = optionalNumber((await c.body()).keyTtlDays, "keyTtlDays", KEY_TTL);
+      const rotated = c.svc.agents.rotateKey(current.id, ttl)!;
+      c.svc.audit.append("agent.key_rotated", label(c.actor), {
+        agentId: current.id,
+        keyExpiresAt: rotated.agent.keyExpiresAt,
+      });
       json(c, 200, { agent: rotated.agent, key: rotated.key });
     },
   },

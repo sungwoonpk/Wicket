@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Agent } from "./agents.js";
 import { bearer, clientIp, collect, HttpError, parseJsonObject, readBody, sendJson } from "./http.js";
+import { keyExpired } from "./keylife.js";
 import { costUsd } from "./pricing.js";
 import { meterText, resolveUsage, StreamMeter, type Usage } from "./usage.js";
 import type { Outcome } from "./requests.js";
@@ -40,6 +41,17 @@ export function authenticateAgent(svc: Services, req: IncomingMessage): Agent {
         "retry-after": String(wait),
       });
     throw new HttpError(401, "invalid or missing API key", "authentication_error");
+  }
+  if (keyExpired(agent.keyExpiresAt)) {
+    // The key is the right one, so this is not guessing, but a retry loop should not run unchecked either.
+    svc.log({ event: "auth.key_expired", agentId: agent.id, expiredAt: agent.keyExpiresAt });
+    const wait = svc.authFailures.take(`agent:${clientIp(req)}`, 20);
+    throw new HttpError(
+      wait > 0 ? 429 : 401,
+      wait > 0 ? "too many failed attempts, try again later" : "this API key has expired, ask an admin to rotate it",
+      wait > 0 ? "rate_limit_error" : "authentication_error",
+      wait > 0 ? { "retry-after": String(wait) } : {},
+    );
   }
   if (agent.disabled) throw new HttpError(403, "this agent is disabled", "permission_error");
   return agent;
