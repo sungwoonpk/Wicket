@@ -16,6 +16,7 @@ import {
 } from "../providers/index.js";
 import { redactMessages, redactText } from "../policy/redact.js";
 import { SseSplitter } from "../policy/sse.js";
+import { redactSse, StreamRedactor } from "../policy/streamredact.js";
 import { decideToolCall, overallAction, toolCallsFromCompletion, toolCallsFromSse } from "../policy/tools.js";
 import type { Finding, ToolCall, ToolDecision } from "../policy/types.js";
 
@@ -315,8 +316,13 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       const splitter = new SseSplitter();
       const meter = new StreamMeter();
       const decoder = new TextDecoder();
+      // A reply that is streamed straight through is masked as it goes, holding back only what could still turn out
+      // to be the start of something sensitive.
+      const masker = policy.redaction.mode !== "off" ? new StreamRedactor(policy.redaction.detectors) : undefined;
       const pass = (events: string[]) => {
-        for (const event of events) if (meter.observe(event, wantsUsage)) res.write(event);
+        for (const event of events) {
+          if (meter.observe(event, wantsUsage)) res.write(masker ? masker.push(event) : event);
+        }
       };
       // An error status carries no usage and is not charged. Anything else is, estimated if the upstream said nothing.
       const settle = (outcome: Outcome) => {
@@ -324,6 +330,11 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
           upstream.status < 400
             ? resolveUsage(meter.usage, body, meter.chars)
             : { usage: {} as Usage, estimated: false };
+        const findings = masker?.findings() ?? [];
+        if (findings.length > 0) {
+          svc.audit.append("response.redacted", agent.id, { model, findings, streamed: true });
+          if (outcome === "ok") outcome = "redacted";
+        }
         record(outcome, upstream.status, charged.usage, charged.estimated);
       };
       try {
@@ -331,6 +342,8 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
           pass(splitter.push(typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true })));
         }
         pass(splitter.flush());
+        const rest = masker?.flush();
+        if (rest) res.write(rest);
         res.end();
         settle(outcomeFor(upstream.status));
       } catch (err) {
@@ -372,6 +385,13 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       if (findings.length > 0) {
         outText = JSON.stringify(parsed);
         responseFindings = findings;
+      }
+    }
+    if (stream && upstream.status === 200 && policy.redaction.mode !== "off") {
+      const masked = redactSse(text, policy.redaction.detectors);
+      if (masked.findings.length > 0) {
+        outText = masked.text;
+        responseFindings = masked.findings;
       }
     }
     const noteMasking = () => {
