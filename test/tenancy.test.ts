@@ -210,6 +210,34 @@ describe("roles and team scope", () => {
     assert.equal((await h.admin("/admin/agents/agent_missing/rotate-key", "POST")).status, 404);
   });
 
+  it("does not show a scoped user another team's policy, through the simulator or the policy list", async () => {
+    await h.admin("/admin/policy?team=finance", "PUT", {
+      tools: [{ tool: "wire_*", action: "deny", reason: "finance-only rule" }],
+    });
+    try {
+      const probe = { toolCall: { name: "wire_funds", args: {} } };
+      const other = await h.admin("/admin/policy/simulate", "POST", { team: "finance", ...probe }, supportViewer);
+      assert.equal(other.status, 403, "another team's policy is not readable through a simulation");
+      assert.ok(!JSON.stringify(other.json).includes("finance-only"));
+
+      const own = await h.admin("/admin/policy/simulate", "POST", { team: "support", ...probe }, supportViewer);
+      assert.equal(own.status, 200, "its own team is fine");
+      assert.equal(own.json.tool.action, "allow");
+
+      const owner = await h.admin("/admin/policy/simulate", "POST", { team: "finance", ...probe });
+      assert.equal(owner.json.tool.action, "deny", "someone with access to every team still can");
+
+      const plain = await h.admin("/admin/policy/simulate", "POST", probe, supportViewer);
+      assert.equal(plain.json.tool.action, "allow", "with no team a scoped user simulates their own team");
+
+      const list = (await h.admin("/admin/policy", "GET", undefined, supportViewer)).json;
+      assert.ok(!list.teamsWithPolicy.includes("finance"), "other teams are not listed");
+      assert.ok((await h.admin("/admin/policy")).json.teamsWithPolicy.includes("finance"), "an owner sees them");
+    } finally {
+      await h.admin("/admin/policy?team=finance", "DELETE");
+    }
+  });
+
   it("records who did what in the audit trail", async () => {
     const events = (await h.admin("/admin/audit?limit=300")).json.events;
     assert.ok(events.some((e: any) => e.type === "agent.created" && e.actor === "admin:admin-4"));

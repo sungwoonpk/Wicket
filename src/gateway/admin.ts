@@ -279,7 +279,11 @@ const routes: Route[] = [
     handler: (c) => {
       const team = c.url.searchParams.get("team");
       if (team === null) {
-        json(c, 200, { policy: c.svc.policies.get(), teamsWithPolicy: c.svc.policies.teamsWithPolicy() });
+        // The organization policy applies to everyone. Which other teams have their own is not for a scoped user to see.
+        const teamsWithPolicy = c.svc.policies
+          .teamsWithPolicy()
+          .filter((t) => c.actor.team === null || t === c.actor.team);
+        json(c, 200, { policy: c.svc.policies.get(), teamsWithPolicy });
         return;
       }
       if (!isTeamSlug(team) || !c.svc.teams.get(team)) throw new HttpError(404, "team not found");
@@ -336,9 +340,13 @@ const routes: Route[] = [
     handler: async (c) => {
       const body = await c.body();
       let policy: Policy;
+      const team = typeof body.team === "string" && isTeamSlug(body.team) ? body.team : null;
+      // Simulating a team's policy shows what its rules do, so it needs the same access as reading that policy.
+      if (team !== null) requireTeamAccess(c.actor, team);
       try {
         if (body.policy !== undefined) policy = parsePolicy(body.policy);
-        else if (typeof body.team === "string" && isTeamSlug(body.team)) policy = c.svc.policies.effective(body.team);
+        else if (team !== null) policy = c.svc.policies.effective(team);
+        else if (c.actor.team !== null) policy = c.svc.policies.effective(c.actor.team);
         else policy = c.svc.policies.get();
       } catch (err) {
         if (err instanceof PolicyError) throw new HttpError(400, err.message);
