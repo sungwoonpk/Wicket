@@ -293,7 +293,10 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
 
   try {
     const governsTools = policy.tools.length > 0 || policy.defaultToolAction !== "allow";
-    const declaresTools = Array.isArray(body.tools) && body.tools.length > 0;
+    // `functions` is the older name for `tools`, and models answer it with `function_call`.
+    const declaresTools =
+      (Array.isArray(body.tools) && body.tools.length > 0) ||
+      (Array.isArray(body.functions) && body.functions.length > 0);
     // A streamed response has to be held back to judge its tool calls, so only do it when it can matter.
     const buffered = !stream || (governsTools && declaresTools);
 
@@ -365,7 +368,14 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       try {
         calls = stream ? toolCallsFromSse(text) : toolCallsFromCompletion(parsed);
       } catch {
-        calls = [];
+        // A reply whose tool calls cannot be read cannot be judged, so it is not passed on.
+        record("upstream_error", 502, usage, estimated);
+        svc.audit.append("tool.unjudgeable", agent.id, { model, upstream: target.name });
+        throw new HttpError(
+          502,
+          "the upstream reply could not be read, so its tool calls could not be judged",
+          "upstream_error",
+        );
       }
       const decisions = calls.map((call) => decideToolCall(policy, call));
       const action = overallAction(decisions);

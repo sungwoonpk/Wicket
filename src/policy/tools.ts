@@ -1,4 +1,5 @@
 import { createContext, Script } from "node:vm";
+import { sseJson } from "./sse.js";
 import type { Condition, Policy, ToolAction, ToolCall, ToolDecision, ToolRule } from "./types.js";
 
 /** Matches a name against a pattern where `*` is a wildcard. Case-insensitive, so `Delete_X` cannot dodge `delete_*`. */
@@ -111,13 +112,18 @@ export function parseToolArguments(raw: unknown): { args: Record<string, unknown
   }
 }
 
-/** Extracts tool calls from an OpenAI-style chat completion body. */
+/** Extracts tool calls from an OpenAI-style chat completion body, in both the `tool_calls` and the older `function_call` shape. */
 export function toolCallsFromCompletion(body: any): ToolCall[] {
   const calls: ToolCall[] = [];
   for (const choice of body?.choices ?? []) {
     for (const tc of choice?.message?.tool_calls ?? []) {
       const { args, valid } = parseToolArguments(tc?.function?.arguments);
       calls.push({ id: tc?.id, name: String(tc?.function?.name ?? ""), args, argsValid: valid });
+    }
+    const legacy = choice?.message?.function_call;
+    if (legacy) {
+      const { args, valid } = parseToolArguments(legacy.arguments);
+      calls.push({ id: undefined, name: String(legacy.name ?? ""), args, argsValid: valid });
     }
   }
   return calls;
@@ -126,23 +132,18 @@ export function toolCallsFromCompletion(body: any): ToolCall[] {
 /** Rebuilds the tool calls of a streamed response from its server-sent events. */
 export function toolCallsFromSse(text: string): ToolCall[] {
   const partial = new Map<string, { id?: string; name: string; args: string }>();
-  for (const event of text.split("\n\n")) {
-    if (!event.startsWith("data: {")) continue;
-    let parsed: any;
-    try {
-      parsed = JSON.parse(event.slice(6));
-    } catch {
-      continue;
-    }
+  const add = (key: string, id: unknown, fn: any) => {
+    const entry = partial.get(key) ?? { name: "", args: "" };
+    if (id) entry.id = String(id);
+    if (fn?.name) entry.name += fn.name;
+    if (fn?.arguments) entry.args += fn.arguments;
+    partial.set(key, entry);
+  };
+  for (const parsed of sseJson(text)) {
     for (const choice of parsed.choices ?? []) {
-      for (const tc of choice?.delta?.tool_calls ?? []) {
-        const key = `${choice.index ?? 0}:${tc.index ?? 0}`;
-        const entry = partial.get(key) ?? { name: "", args: "" };
-        if (tc.id) entry.id = tc.id;
-        if (tc.function?.name) entry.name += tc.function.name;
-        if (tc.function?.arguments) entry.args += tc.function.arguments;
-        partial.set(key, entry);
-      }
+      const at = choice?.index ?? 0;
+      for (const tc of choice?.delta?.tool_calls ?? []) add(`${at}:${tc.index ?? 0}`, tc.id, tc.function);
+      if (choice?.delta?.function_call) add(`${at}:function_call`, undefined, choice.delta.function_call);
     }
   }
   return [...partial.values()].map((p) => {
