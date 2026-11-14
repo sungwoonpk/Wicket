@@ -310,8 +310,6 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     const declaresTools =
       (Array.isArray(body.tools) && body.tools.length > 0) ||
       (Array.isArray(body.functions) && body.functions.length > 0);
-    // A streamed response has to be held back to judge its tool calls, so only do it when it can matter.
-    const buffered = !stream || (governsTools && declaresTools);
 
     let upstream;
     try {
@@ -319,6 +317,12 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     } catch (err) {
       return failUpstream(err);
     }
+
+    // The caller asked for a stream, but an upstream may answer with a plain completion or an error body. What came
+    // is what gets read, judged and masked, whatever was asked for.
+    const sse = stream && /text\/event-stream/i.test(upstream.contentType);
+    // A stream has to be held back to judge its tool calls, so only do it when it can matter.
+    const buffered = !sse || (governsTools && declaresTools);
 
     const okOutcome: Outcome = redacted ? "redacted" : "ok";
     const outcomeFor = (status: number): Outcome => (status >= 400 ? "upstream_error" : okOutcome);
@@ -372,14 +376,14 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     } catch (err) {
       return failUpstream(err);
     }
-    const metered = meterText(text, stream);
+    const metered = meterText(text, sse);
     const { usage, estimated } =
       upstream.status < 400
         ? resolveUsage(metered.usage, body, metered.chars)
         : { usage: metered.usage, estimated: false };
 
     let parsed: any;
-    if (upstream.status === 200 && !stream) {
+    if (upstream.status === 200 && !sse) {
       try {
         parsed = JSON.parse(text);
       } catch {
@@ -399,7 +403,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
         responseFindings = findings;
       }
     }
-    if (stream && upstream.status === 200 && policy.redaction.mode !== "off") {
+    if (sse && upstream.status === 200 && policy.redaction.mode !== "off") {
       const masked = redactSse(text, policy.redaction.detectors);
       if (masked.findings.length > 0) {
         outText = masked.text;
@@ -414,7 +418,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     if (upstream.status === 200 && governsTools) {
       let calls: ToolCall[];
       try {
-        calls = stream ? toolCallsFromSse(text) : toolCallsFromCompletion(parsed);
+        calls = sse ? toolCallsFromSse(text) : toolCallsFromCompletion(parsed);
       } catch {
         // A reply whose tool calls cannot be read cannot be judged, so it is not passed on.
         record("upstream_error", 502, usage, estimated);

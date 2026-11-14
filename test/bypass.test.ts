@@ -101,6 +101,61 @@ describe("a reply that cannot be read is refused, not waved through", () => {
   });
 });
 
+describe("an upstream that ignores `stream` and answers with plain JSON", () => {
+  let upstream: Server;
+  let h: Harness;
+  let key: string;
+  let reply: unknown;
+  before(async () => {
+    upstream = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(reply));
+    });
+    h = await harness({ gateway: { upstreamUrl: await listen(upstream) } });
+    key = await h.newAgent();
+    await h.admin("/admin/policy", "PUT", {
+      redaction: { mode: "redact", detectors: ["email"] },
+      tools: [{ tool: "delete_*", action: "deny", reason: "no deletes" }],
+    });
+  });
+  after(() => {
+    h.close();
+    upstream.closeAllConnections();
+    upstream.close();
+  });
+
+  const completion = (message: object) => ({
+    id: "x",
+    object: "chat.completion",
+    choices: [{ index: 0, message: { role: "assistant", content: null, ...message }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 3, completion_tokens: 4 },
+  });
+
+  it("still judges its tool calls", async () => {
+    reply = completion({
+      tool_calls: [{ id: "c1", type: "function", function: { name: "delete_row", arguments: "{}" } }],
+    });
+    const res = await h.chat(key, "go", { stream: true, tools: TOOLS });
+    assert.equal(res.status, 403);
+  });
+
+  it("still masks its text", async () => {
+    reply = completion({ content: "write to ann@example.com" });
+    for (const extra of [{ stream: true }, { stream: true, tools: TOOLS }]) {
+      const res = await h.chat(key, "go", extra);
+      assert.equal(res.status, 200);
+      assert.equal(((await res.json()) as any).choices[0].message.content, "write to [REDACTED:EMAIL]");
+    }
+  });
+
+  it("passes an error answer through as it came", async () => {
+    reply = { error: { message: "no such model", type: "invalid_request_error" } };
+    const res = await h.chat(key, "go", { stream: true });
+    assert.equal(res.status, 200, "this stub answers 200 with an error body, and it is not rewritten");
+    assert.equal(((await res.json()) as any).error.message, "no such model");
+  });
+});
+
 describe("reading tool calls", () => {
   it("reads the older function_call shape from a completion and from a stream", () => {
     const completion = {
