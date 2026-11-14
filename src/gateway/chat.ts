@@ -363,6 +363,22 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       }
     }
 
+    // Mask the reply before anything is decided about it, so every way out, including a reply that is held and
+    // released later, carries the masked text and nothing raw is kept in the approval queue.
+    let outText = text;
+    let responseFindings: Finding[] = [];
+    if (parsed && policy.redaction.mode !== "off") {
+      const { findings } = redactCompletion(parsed, policy.redaction.detectors);
+      if (findings.length > 0) {
+        outText = JSON.stringify(parsed);
+        responseFindings = findings;
+      }
+    }
+    const noteMasking = () => {
+      if (responseFindings.length > 0)
+        svc.audit.append("response.redacted", agent.id, { model, findings: responseFindings });
+    };
+
     if (upstream.status === 200 && governsTools) {
       let calls: ToolCall[];
       try {
@@ -400,8 +416,9 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
             "retry-after": "30",
           });
         }
-        const approval = svc.approvals.hold(agent.id, decisions, { body: text, contentType: upstream.contentType });
+        const approval = svc.approvals.hold(agent.id, decisions, { body: outText, contentType: upstream.contentType });
         record("pending_approval", 202, usage, estimated);
+        noteMasking();
         svc.audit.append("approval.requested", agent.id, {
           approvalId: approval.id,
           decisions: describeDecisions(decisions.filter((d) => d.action === "require_approval")),
@@ -417,15 +434,10 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       }
     }
 
-    let outText = text;
     let outcome = outcomeFor(upstream.status);
-    if (parsed && policy.redaction.mode !== "off") {
-      const { findings } = redactCompletion(parsed, policy.redaction.detectors);
-      if (findings.length > 0) {
-        outText = JSON.stringify(parsed);
-        outcome = "redacted";
-        svc.audit.append("response.redacted", agent.id, { model, findings });
-      }
+    if (responseFindings.length > 0) {
+      outcome = "redacted";
+      noteMasking();
     }
 
     res.writeHead(upstream.status, { "content-type": upstream.contentType });
