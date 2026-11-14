@@ -99,6 +99,11 @@ const MIGRATIONS: string[] = [
     mac TEXT NOT NULL
   );
   `,
+  `
+  ALTER TABLE agents ADD COLUMN key_ttl_days INTEGER;
+  ALTER TABLE agents ADD COLUMN key_expires_at TEXT;
+  ALTER TABLE admin_keys ADD COLUMN expires_at TEXT;
+  `,
 ];
 
 /** Opens the database and applies any migrations that have not run yet. */

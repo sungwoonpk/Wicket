@@ -5,6 +5,8 @@ export interface MockOptions {
   latencyMs?: number;
   /** The key the Anthropic-style route requires in `x-api-key`. */
   anthropicKey?: string;
+  /** Never report token usage, like a server that does not support it. */
+  omitUsage?: boolean;
 }
 
 interface ChatMessage {
@@ -81,6 +83,9 @@ interface Scenario {
   slowMs?: number;
   /** Use this exact text as the reply. */
   say?: string;
+  /** Frame the event stream the way some servers do: CRLF line ends, and no space after `data:`. */
+  crlf?: boolean;
+  bare?: boolean;
 }
 
 /** Directives in the last user message that make the mock misbehave on purpose, for edge-case tests. */
@@ -90,6 +95,8 @@ function scenarioFor(messages: ChatMessage[]): Scenario {
   const status = /\[\[status:(\d{3})\]\]/.exec(text);
   if (status) s.status = Number(status[1]);
   if (/\[\[badjson\]\]/.test(text)) s.badJson = true;
+  if (/\[\[crlf\]\]/.test(text)) s.crlf = true;
+  if (/\[\[bare\]\]/.test(text)) s.bare = true;
   const slow = /\[\[slow:(\d+)\]\]/.exec(text);
   if (slow) s.slowMs = Math.min(Number(slow[1]), 30_000);
   const say = /\[\[say:([^\]]*)\]\]/.exec(text);
@@ -99,17 +106,30 @@ function scenarioFor(messages: ChatMessage[]): Scenario {
   return s;
 }
 
+interface StreamStyle {
+  /** Send token usage only when the caller asked for it with `stream_options.include_usage`, as OpenAI does. */
+  includeUsage: boolean;
+  /** Answer with the older `function_call` shape instead of `tool_calls`. */
+  legacy: boolean;
+  crlf: boolean;
+  bare: boolean;
+}
+
 function openAiStream(
   res: ServerResponse,
   model: string,
   reply: string,
   toolCall: MockToolCall | undefined,
   usage: object,
+  style: StreamStyle,
 ): void {
   const id = "chatcmpl-mock";
   const created = 0;
+  const eol = style.crlf ? "\r\n" : "\n";
+  const field = style.bare ? "data:" : "data: ";
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  const send = (delta: object, finish: string | null, withUsage = false) => {
+  const emit = (payload: string) => res.write(`${field}${payload}${eol}${eol}`);
+  const send = (delta: object, finish: string | null) => {
     const chunk: any = {
       id,
       object: "chat.completion.chunk",
@@ -117,36 +137,46 @@ function openAiStream(
       model,
       choices: [{ index: 0, delta, finish_reason: finish }],
     };
-    if (withUsage) chunk.usage = usage;
-    res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    if (style.includeUsage) chunk.usage = null;
+    emit(JSON.stringify(chunk));
   };
 
   if (toolCall) {
     // Split the arguments in two fragments, as real providers stream them.
     const half = Math.ceil(toolCall.arguments.length / 2);
+    if (reply) send({ role: "assistant", content: reply }, null);
+    const head = style.legacy
+      ? { function_call: { name: toolCall.name, arguments: toolCall.arguments.slice(0, half) } }
+      : {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_mock_1",
+              type: "function",
+              function: { name: toolCall.name, arguments: toolCall.arguments.slice(0, half) },
+            },
+          ],
+        };
+    send(reply ? head : { role: "assistant", ...head }, null);
+    const rest = toolCall.arguments.slice(half);
     send(
-      {
-        role: "assistant",
-        tool_calls: [
-          {
-            index: 0,
-            id: "call_mock_1",
-            type: "function",
-            function: { name: toolCall.name, arguments: toolCall.arguments.slice(0, half) },
-          },
-        ],
-      },
+      style.legacy
+        ? { function_call: { arguments: rest } }
+        : { tool_calls: [{ index: 0, function: { arguments: rest } }] },
       null,
     );
-    send({ tool_calls: [{ index: 0, function: { arguments: toolCall.arguments.slice(half) } }] }, null);
-    send({}, "tool_calls", true);
+    send({}, style.legacy ? "function_call" : "tool_calls");
   } else {
     reply
       .split(" ")
       .forEach((word, i) => send(i === 0 ? { role: "assistant", content: word } : { content: ` ${word}` }, null));
-    send({}, "stop", true);
+    send({}, "stop");
   }
-  res.write("data: [DONE]\n\n");
+  // Like OpenAI, usage comes as one last chunk with no choices, and only when it was asked for.
+  if (style.includeUsage) {
+    emit(JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [], usage }));
+  }
+  emit("[DONE]");
   res.end();
 }
 
@@ -266,9 +296,10 @@ export function createMockUpstream(options: MockOptions = {}): Server {
 
       const model = body.model ?? "mock-model";
       const toolCall = toolCallFor(messages);
-      const reply = toolCall ? "" : (scenario.say ?? replyFor(messages));
+      // A tool call normally comes alone. With `[[say:...]]` or `[[leak]]` the reply text comes with it, as models do.
+      const reply = toolCall ? (scenario.say ?? "") : (scenario.say ?? replyFor(messages));
       const promptTokens = estimateTokens(messages.map((m) => contentText(m.content)).join("\n"));
-      const completionTokens = estimateTokens(toolCall ? toolCall.name + toolCall.arguments : reply);
+      const completionTokens = estimateTokens(toolCall ? reply + toolCall.name + toolCall.arguments : reply);
 
       if (anthropic) {
         if (body.stream) {
@@ -295,26 +326,44 @@ export function createMockUpstream(options: MockOptions = {}): Server {
         completion_tokens: completionTokens,
         total_tokens: promptTokens + completionTokens,
       };
+      // A request that declares `functions` and no `tools` is answered in the older `function_call` shape.
+      const legacy = Array.isArray(body.functions) && !Array.isArray(body.tools);
       if (body.stream) {
-        openAiStream(res, model, reply, toolCall, usage);
+        openAiStream(res, model, reply, toolCall, usage, {
+          includeUsage: body.stream_options?.include_usage === true && !options.omitUsage,
+          legacy,
+          crlf: scenario.crlf === true,
+          bare: scenario.bare === true,
+        });
         return;
       }
       const message = toolCall
-        ? {
-            role: "assistant",
-            content: null,
-            tool_calls: [
-              { id: "call_mock_1", type: "function", function: { name: toolCall.name, arguments: toolCall.arguments } },
-            ],
-          }
+        ? legacy
+          ? {
+              role: "assistant",
+              content: reply || null,
+              function_call: { name: toolCall.name, arguments: toolCall.arguments },
+            }
+          : {
+              role: "assistant",
+              content: reply || null,
+              tool_calls: [
+                {
+                  id: "call_mock_1",
+                  type: "function",
+                  function: { name: toolCall.name, arguments: toolCall.arguments },
+                },
+              ],
+            }
         : { role: "assistant", content: reply };
+      const finish = toolCall ? (legacy ? "function_call" : "tool_calls") : "stop";
       sendJson(res, 200, {
         id: "chatcmpl-mock",
         object: "chat.completion",
         created: 0,
         model,
-        choices: [{ index: 0, message, finish_reason: toolCall ? "tool_calls" : "stop" }],
-        usage,
+        choices: [{ index: 0, message, finish_reason: finish }],
+        ...(options.omitUsage ? {} : { usage }),
       });
     } catch (err) {
       const bad = err instanceof SyntaxError;

@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Agent } from "./agents.js";
 import { bearer, clientIp, collect, HttpError, parseJsonObject, readBody, sendJson } from "./http.js";
+import { keyExpired } from "./keylife.js";
 import { costUsd } from "./pricing.js";
+import { meterText, resolveUsage, StreamMeter, type Usage } from "./usage.js";
 import type { Outcome } from "./requests.js";
 import type { Services } from "./services.js";
 import type { Target } from "./upstreams.js";
@@ -14,8 +16,12 @@ import {
   UpstreamUnreachableError,
 } from "../providers/index.js";
 import { redactMessages, redactText } from "../policy/redact.js";
+import { SseSplitter } from "../policy/sse.js";
+import { redactSse, StreamRedactor } from "../policy/streamredact.js";
 import { decideToolCall, overallAction, toolCallsFromCompletion, toolCallsFromSse } from "../policy/tools.js";
 import type { Finding, ToolCall, ToolDecision } from "../policy/types.js";
+
+export { extractUsage } from "./usage.js";
 
 const MAX_BUFFERED_BYTES = 10_000_000;
 const MODEL_NAME = /^[\w.:/@+-]{1,200}$/;
@@ -23,27 +29,6 @@ const BUDGET_ALERTS: { percent: number; type: string }[] = [
   { percent: 80, type: "budget.warning" },
   { percent: 100, type: "budget.exhausted" },
 ];
-
-type Usage = { promptTokens?: number; completionTokens?: number };
-
-/** Reads token usage from a JSON response, or from the last usage-bearing SSE event. */
-export function extractUsage(text: string, stream: boolean): Usage {
-  try {
-    let usage: any;
-    if (stream) {
-      for (const event of text.split("\n\n").filter((e) => e.startsWith("data: {"))) {
-        const parsed = JSON.parse(event.slice(6));
-        if (parsed.usage) usage = parsed.usage;
-      }
-    } else {
-      usage = JSON.parse(text).usage;
-    }
-    if (!usage) return {};
-    return { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens };
-  } catch {
-    return {};
-  }
-}
 
 /** Authenticates an agent key. Repeated failures from one address are slowed down. */
 export function authenticateAgent(svc: Services, req: IncomingMessage): Agent {
@@ -56,6 +41,17 @@ export function authenticateAgent(svc: Services, req: IncomingMessage): Agent {
         "retry-after": String(wait),
       });
     throw new HttpError(401, "invalid or missing API key", "authentication_error");
+  }
+  if (keyExpired(agent.keyExpiresAt)) {
+    // The key is the right one, so this is not guessing, but a retry loop should not run unchecked either.
+    svc.log({ event: "auth.key_expired", agentId: agent.id, expiredAt: agent.keyExpiresAt });
+    const wait = svc.authFailures.take(`agent:${clientIp(req)}`, 20);
+    throw new HttpError(
+      wait > 0 ? 429 : 401,
+      wait > 0 ? "too many failed attempts, try again later" : "this API key has expired, ask an admin to rotate it",
+      wait > 0 ? "rate_limit_error" : "authentication_error",
+      wait > 0 ? { "retry-after": String(wait) } : {},
+    );
   }
   if (agent.disabled) throw new HttpError(403, "this agent is disabled", "permission_error");
   return agent;
@@ -169,7 +165,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     }
   };
 
-  const record = (outcome: Outcome, status: number, usage: Usage = {}) => {
+  const record = (outcome: Outcome, status: number, usage: Usage = {}, estimated = false) => {
     const latencyMs = Math.round(performance.now() - started);
     const cost = costUsd(svc.prices, model, usage.promptTokens, usage.completionTokens);
     svc.requests.add({
@@ -196,6 +192,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       outcome,
       latencyMs,
       costUsd: cost,
+      ...(estimated ? { usageEstimated: true } : {}),
     });
     if (cost > 0) checkBudget();
   };
@@ -247,6 +244,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
   }
 
   const policy = svc.policies.effective(agent.team);
+  const wantsUsage = body.stream_options?.include_usage === true;
   let redacted = false;
   if (policy.redaction.mode !== "off") {
     const result = redactMessages(body.messages, policy.redaction.detectors);
@@ -308,9 +306,10 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
 
   try {
     const governsTools = policy.tools.length > 0 || policy.defaultToolAction !== "allow";
-    const declaresTools = Array.isArray(body.tools) && body.tools.length > 0;
-    // A streamed response has to be held back to judge its tool calls, so only do it when it can matter.
-    const buffered = !stream || (governsTools && declaresTools);
+    // `functions` is the older name for `tools`, and models answer it with `function_call`.
+    const declaresTools =
+      (Array.isArray(body.tools) && body.tools.length > 0) ||
+      (Array.isArray(body.functions) && body.functions.length > 0);
 
     let upstream;
     try {
@@ -319,29 +318,54 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       return failUpstream(err);
     }
 
+    // The caller asked for a stream, but an upstream may answer with a plain completion or an error body. What came
+    // is what gets read, judged and masked, whatever was asked for.
+    const sse = stream && /text\/event-stream/i.test(upstream.contentType);
+    // A stream has to be held back to judge its tool calls, so only do it when it can matter.
+    const buffered = !sse || (governsTools && declaresTools);
+
     const okOutcome: Outcome = redacted ? "redacted" : "ok";
     const outcomeFor = (status: number): Outcome => (status >= 400 ? "upstream_error" : okOutcome);
 
     if (!buffered) {
       res.writeHead(upstream.status, { "content-type": upstream.contentType });
-      let captured = "";
+      const splitter = new SseSplitter();
+      const meter = new StreamMeter();
       const decoder = new TextDecoder();
+      // A reply that is streamed straight through is masked as it goes, holding back only what could still turn out
+      // to be the start of something sensitive.
+      const masker = policy.redaction.mode !== "off" ? new StreamRedactor(policy.redaction.detectors) : undefined;
+      const pass = (events: string[]) => {
+        for (const event of events) {
+          if (meter.observe(event, wantsUsage)) res.write(masker ? masker.push(event) : event);
+        }
+      };
+      // An error status carries no usage and is not charged. Anything else is, estimated if the upstream said nothing.
+      const settle = (outcome: Outcome) => {
+        const charged =
+          upstream.status < 400
+            ? resolveUsage(meter.usage, body, meter.chars)
+            : { usage: {} as Usage, estimated: false };
+        const findings = masker?.findings() ?? [];
+        if (findings.length > 0) {
+          svc.audit.append("response.redacted", agent.id, { model, findings, streamed: true });
+          if (outcome === "ok") outcome = "redacted";
+        }
+        record(outcome, upstream.status, charged.usage, charged.estimated);
+      };
       try {
         for await (const chunk of upstream.chunks) {
-          const piece = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
-          captured += piece;
-          res.write(piece);
+          pass(splitter.push(typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true })));
         }
+        pass(splitter.flush());
+        const rest = masker?.flush();
+        if (rest) res.write(rest);
         res.end();
-        record(outcomeFor(upstream.status), upstream.status, extractUsage(captured, true));
+        settle(outcomeFor(upstream.status));
       } catch (err) {
         // Headers are already sent, so the stream can only be cut short.
         res.end();
-        record(
-          (err as Error)?.name === "AbortError" ? "cancelled" : "upstream_error",
-          upstream.status,
-          extractUsage(captured, true),
-        );
+        settle((err as Error)?.name === "AbortError" ? "cancelled" : "upstream_error");
       }
       return;
     }
@@ -352,10 +376,14 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     } catch (err) {
       return failUpstream(err);
     }
-    const usage = extractUsage(text, stream);
+    const metered = meterText(text, sse);
+    const { usage, estimated } =
+      upstream.status < 400
+        ? resolveUsage(metered.usage, body, metered.chars)
+        : { usage: metered.usage, estimated: false };
 
     let parsed: any;
-    if (upstream.status === 200 && !stream) {
+    if (upstream.status === 200 && !sse) {
       try {
         parsed = JSON.parse(text);
       } catch {
@@ -364,18 +392,48 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       }
     }
 
+    // Mask the reply before anything is decided about it, so every way out, including a reply that is held and
+    // released later, carries the masked text and nothing raw is kept in the approval queue.
+    let outText = text;
+    let responseFindings: Finding[] = [];
+    if (parsed && policy.redaction.mode !== "off") {
+      const { findings } = redactCompletion(parsed, policy.redaction.detectors);
+      if (findings.length > 0) {
+        outText = JSON.stringify(parsed);
+        responseFindings = findings;
+      }
+    }
+    if (sse && upstream.status === 200 && policy.redaction.mode !== "off") {
+      const masked = redactSse(text, policy.redaction.detectors);
+      if (masked.findings.length > 0) {
+        outText = masked.text;
+        responseFindings = masked.findings;
+      }
+    }
+    const noteMasking = () => {
+      if (responseFindings.length > 0)
+        svc.audit.append("response.redacted", agent.id, { model, findings: responseFindings });
+    };
+
     if (upstream.status === 200 && governsTools) {
       let calls: ToolCall[];
       try {
-        calls = stream ? toolCallsFromSse(text) : toolCallsFromCompletion(parsed);
+        calls = sse ? toolCallsFromSse(text) : toolCallsFromCompletion(parsed);
       } catch {
-        calls = [];
+        // A reply whose tool calls cannot be read cannot be judged, so it is not passed on.
+        record("upstream_error", 502, usage, estimated);
+        svc.audit.append("tool.unjudgeable", agent.id, { model, upstream: target.name });
+        throw new HttpError(
+          502,
+          "the upstream reply could not be read, so its tool calls could not be judged",
+          "upstream_error",
+        );
       }
       const decisions = calls.map((call) => decideToolCall(policy, call));
       const action = overallAction(decisions);
 
       if (action === "deny") {
-        record("denied_tool", 403, usage);
+        record("denied_tool", 403, usage, estimated);
         svc.audit.append("tool.denied", agent.id, { model, decisions: describeDecisions(decisions) });
         const denied = decisions.find((d) => d.action === "deny")!;
         throw new HttpError(
@@ -389,16 +447,25 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
 
       if (action === "require_approval") {
         if (svc.approvals.pendingForAgent(agent.id) >= svc.options.maxPendingApprovalsPerAgent) {
-          record("rate_limited", 429, usage);
+          record("rate_limited", 429, usage, estimated);
           throw new HttpError(429, "this agent has too many tool calls waiting for approval", "rate_limit_error", {
             "retry-after": "30",
           });
         }
-        const approval = svc.approvals.hold(agent.id, decisions, { body: text, contentType: upstream.contentType });
-        record("pending_approval", 202, usage);
+        const approval = svc.approvals.hold(agent.id, decisions, { body: outText, contentType: upstream.contentType });
+        record("pending_approval", 202, usage, estimated);
+        noteMasking();
         svc.audit.append("approval.requested", agent.id, {
           approvalId: approval.id,
           decisions: describeDecisions(decisions.filter((d) => d.action === "require_approval")),
+        });
+        // Names and reasons only. The arguments can hold anything, so they stay in the queue for the reviewer.
+        svc.webhook?.notify("approval.requested", {
+          approvalId: approval.id,
+          agentId: agent.id,
+          agentName: agent.name,
+          team: agent.team,
+          toolCalls: approval.toolCalls.map((c) => ({ name: c.name, reason: c.reason })),
         });
         sendJson(res, 202, {
           object: "wicket.approval_required",
@@ -411,20 +478,15 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       }
     }
 
-    let outText = text;
     let outcome = outcomeFor(upstream.status);
-    if (parsed && policy.redaction.mode !== "off") {
-      const { findings } = redactCompletion(parsed, policy.redaction.detectors);
-      if (findings.length > 0) {
-        outText = JSON.stringify(parsed);
-        outcome = "redacted";
-        svc.audit.append("response.redacted", agent.id, { model, findings });
-      }
+    if (responseFindings.length > 0) {
+      outcome = "redacted";
+      noteMasking();
     }
 
     res.writeHead(upstream.status, { "content-type": upstream.contentType });
     res.end(outText);
-    record(outcome, upstream.status, usage);
+    record(outcome, upstream.status, usage, estimated);
   } finally {
     res.off("close", onClose);
   }

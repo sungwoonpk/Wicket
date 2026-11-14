@@ -77,6 +77,13 @@ await call(support, "hello");
 await call(finance, '[[tool:refund {"amount":500}]]');
 await call(hostile, "hello");
 const viewer = (await api("/admin/users", "POST", { name: "Vee", role: "viewer", team: "support" })).key;
+// Keys with an end date: one that runs out soon, one that already has, and a user whose key does.
+await api("/admin/agents", "POST", { name: "short-key-bot", team: "support", keyTtlDays: 3 });
+const lapsed = await api("/admin/agents", "POST", { name: "lapsed-key-bot", team: "support", keyTtlDays: 1 });
+app.db
+  .prepare("UPDATE agents SET key_expires_at = ? WHERE id = ?")
+  .run(new Date(Date.now() - 60_000).toISOString(), lapsed.agent.id);
+await api("/admin/users", "POST", { name: "Temp", role: "viewer", keyTtlDays: 30 });
 
 async function dom(hash: string): Promise<string> {
   const { stdout } = await run(
@@ -111,11 +118,11 @@ try {
   const pages: [string, string[]][] = [
     ["overview", ["Traffic, last 24 hours", "Spend this month", "Recent requests"]],
     ["approvals", ["Waiting (1)", "refund"]],
-    ["agents", ["support-bot", "billing-agent", "New agent"]],
+    ["agents", ["support-bot", "billing-agent", "New agent", "Key expires in 3 days", "Key expired"]],
     ["policy", ["Sensitive data", "Tool calls", "Try it"]],
     ["requests", ["Every outcome", "Allowed"]],
     ["audit", ["Chain intact", "agent.created"]],
-    ["settings", ["New user", "Vee"]],
+    ["settings", ["New user", "Vee", "Temp", "Key expires in 30 days"]],
   ];
   for (const [route, expected] of pages) {
     const html = await dom(`/${route}&token=${ADMIN}`);

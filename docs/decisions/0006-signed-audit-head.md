@@ -31,7 +31,7 @@ A database from before heads existed is adopted once: its newest event is signed
 
 ## Alternatives considered
 
-- **Publish each head to an external append-only log or a transparency log.** The strongest answer, and a good future
-  addition. It needs infrastructure this project does not assume.
+- **Publish each head to an external append-only log or a transparency log.** The strongest answer. It needs
+  infrastructure this project does not assume. [0011](0011-audit-anchor.md) is the part that works without it.
 - **Sign every event with a key.** Proves authorship but needs key management per writer, and still needs the head to
   notice deletions.

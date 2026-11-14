@@ -25,13 +25,13 @@ Agents act through tools, and most teams have no control point in front of them.
 ## Features
 
 - **Drop-in proxy.** OpenAI-compatible `POST /v1/chat/completions`, streamed or not. Change the base URL and the key.
-- **Per-agent limits.** Models, monthly budget, requests per minute, requests in flight. Every refusal says why.
-- **Sensitive data.** Mask or block, per team, with text normalized first so tricks do not hide anything.
+- **Per-agent limits.** Models, monthly budget, requests per minute, requests in flight, and an optional key lifetime. Every refusal says why.
+- **Sensitive data.** Mask or block, per team, in prompts and in replies, streamed or not. Text is normalized first so tricks do not hide anything.
 - **Tool-call rules.** `allow`, `deny` or `require_approval`, on the tool name and its arguments. If a call cannot be judged, it fails closed.
-- **Approval queue.** A held call is released only after a person approves it.
+- **Approval queue.** A held call is released only after a person approves it, and a signed webhook tells reviewers.
 - **Teams and roles.** Four roles, and a user can be limited to one team.
 - **Providers.** OpenAI-compatible servers and the Anthropic Messages API, routed by model name.
-- **Audit trail and dashboard.** Chained and signed, with a web dashboard in light and dark.
+- **Audit trail and dashboard.** Chained, signed, and checkable against a copy kept elsewhere, with a web dashboard in light and dark.
 
 ## Run it
 

@@ -11,5 +11,5 @@ The full description is in [openapi.yaml](openapi.yaml), and a test fails if it 
 | `/admin/approvals`, `.../:id/approve`, `.../:id/deny`    | Review the queue                                                 |
 | `/admin/requests`, `/admin/summary`, `/admin/timeseries` | Traffic, totals and charts                                       |
 | `/admin/teams`, `/admin/users`, `/admin/upstreams`       | Organization setup                                               |
-| `/admin/audit`, `/admin/audit/verify`                    | Read the trail. Check the chain and the signed head              |
+| `/admin/audit`, `/admin/audit/head`, `.../verify`        | Read the trail. Get the newest event to keep. Check the chain    |
 | `/metrics`, `/healthz`, `/readyz`, `/dashboard`          | Prometheus text, liveness, readiness, the admin page             |

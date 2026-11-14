@@ -84,6 +84,15 @@
     if (s < 86400) return Math.round(s / 3600) + "h ago";
     return Math.round(s / 86400) + "d ago";
   }
+  /** A note on when a key runs out: nothing for a key that does not, a warning when it is close, a flag when it is gone. */
+  function expiryNote(iso) {
+    if (!iso) return null;
+    const left = new Date(iso).getTime() - Date.now();
+    if (left <= 0) return h("div", {}, h("span", { class: "pill bad", text: "Key expired" }));
+    const days = Math.ceil(left / 86400000);
+    const text = "Key expires in " + days + (days === 1 ? " day" : " days");
+    return days <= 7 ? h("div", {}, h("span", { class: "pill warn", text })) : h("div", { class: "faint", text });
+  }
   const pretty = (value) => JSON.stringify(value, null, 2);
   const ROLE_LEVEL = { viewer: 1, approver: 2, admin: 3, owner: 4 };
 
@@ -827,6 +836,14 @@
       value: existing && existing.maxConcurrent !== null ? String(existing.maxConcurrent) : "",
       placeholder: "No limit",
     });
+    const lifetime = h("input", {
+      type: "number",
+      min: "1",
+      max: "3650",
+      step: "1",
+      value: existing && existing.keyTtlDays !== null ? String(existing.keyTtlDays) : "",
+      placeholder: "Never expires",
+    });
     const ok = await modal({
       title: existing ? "Edit " + existing.name : "New agent",
       submitLabel: existing ? "Save changes" : "Create agent",
@@ -835,6 +852,11 @@
         h("div", { class: "row" }, field("Team", team), field("Monthly budget (USD)", budget)),
         field("Allowed models", models, "Comma separated. Leave empty to allow any model."),
         h("div", { class: "row" }, field("Requests per minute", rate), field("Max concurrent requests", concurrent)),
+        field(
+          "Key lifetime (days)",
+          lifetime,
+          "How long a key works after it is issued, and again after each rotation. Leave empty for no expiry.",
+        ),
       ],
       onSubmit: async () => {
         const settings = {
@@ -844,6 +866,9 @@
           ratePerMinute: numberOrNull(rate.value),
           maxConcurrent: numberOrNull(concurrent.value),
         };
+        // Changing the lifetime of an existing key counts from today, so it is sent only when it was changed.
+        const keyTtlDays = numberOrNull(lifetime.value);
+        if (!existing || keyTtlDays !== existing.keyTtlDays) settings.keyTtlDays = keyTtlDays;
         if (allTeams()) settings.team = team.value;
         if (existing) {
           await api("/admin/agents/" + existing.id, { method: "PATCH", body: settings });
@@ -899,6 +924,7 @@
             a.disabled
               ? h("span", { class: "pill bad", text: "Disabled" })
               : h("span", { class: "pill ok", text: "Active" }),
+            expiryNote(a.keyExpiresAt),
           ),
           h(
             "td",
@@ -1857,6 +1883,13 @@
               "viewer",
             );
             const team = selectOf([{ value: "", label: "All teams" }, ...teamOptions()], "");
+            const lifetime = h("input", {
+              type: "number",
+              min: "1",
+              max: "3650",
+              step: "1",
+              placeholder: "Never expires",
+            });
             const ok = await modal({
               title: "New user",
               submitLabel: "Create user",
@@ -1864,11 +1897,17 @@
                 field("Name", name),
                 field("Role", role),
                 field("Team", team, "A user limited to one team sees and changes only that team."),
+                field("Key lifetime (days)", lifetime, "Leave empty for a key that does not expire."),
               ],
               onSubmit: async () => {
                 const r = await api("/admin/users", {
                   method: "POST",
-                  body: { name: name.value.trim(), role: role.value, team: team.value || null },
+                  body: {
+                    name: name.value.trim(),
+                    role: role.value,
+                    team: team.value || null,
+                    keyTtlDays: numberOrNull(lifetime.value),
+                  },
                 });
                 setTimeout(
                   () =>
@@ -1913,6 +1952,7 @@
                   u.disabled
                     ? h("span", { class: "pill bad", text: "Disabled" })
                     : h("span", { class: "pill ok", text: "Active" }),
+                  expiryNote(u.expiresAt),
                 ),
                 h(
                   "td",
