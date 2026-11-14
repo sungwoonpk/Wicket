@@ -28,7 +28,7 @@ tool-call denials, approval requested, approved and denied.
 - **Tail truncation** is not detected by the chain alone. It is caught by the signed head, see
   [0006](0006-signed-audit-head.md).
 - The chain proves integrity, not authorship. Someone who can rewrite the whole table and
-  recompute every hash can forge a log. Anchoring externally fixes this too.
+  recompute every hash can forge a log. Anchoring externally fixes this, see [0011](0011-audit-anchor.md).
 - Writes are serialized, which is fine for one SQLite file and would need rethinking on a
   different store.
 

@@ -24,9 +24,11 @@ How tool calls and sensitive data are controlled, and what happens when a rule c
 }
 ```
 
-Load it with `PUT /admin/policy`, or `PUT /admin/policy?team=finance` for one team. Rules run in order and the first match wins. Tool names match without regard to case, and `*` is a wildcard. Conditions read the tool's JSON arguments by dot path (`customer.id`). With several tool calls in one response, the strictest result applies.
+Load it with `PUT /admin/policy`, or `PUT /admin/policy?team=finance` for one team. Rules run in order and the first match wins. Tool names match without regard to case, and `*` is a wildcard. Conditions read the tool's JSON arguments by dot path (`customer.id`). With several tool calls in one response, the strictest result applies. Calls are read in the `tool_calls` shape and in the older `function_call` shape, and a request that declares `functions` is treated like one that declares `tools`.
 
-**Fails closed.** A condition that cannot be judged counts as _holding_ for rules that deny or hold for approval, and as _failing_ for rules that allow. A refund with a missing amount, an amount written as text or broken JSON therefore meets the strict rule and never the permissive one. Regular expressions run with a 20 ms limit, so a pattern that never finishes cannot freeze the gateway. See [ADR 0008](decisions/0008-fail-closed-policy.md).
+**Fails closed.** A condition that cannot be judged counts as _holding_ for rules that deny or hold for approval, and as _failing_ for rules that allow. A refund with a missing amount, an amount written as text or broken JSON therefore meets the strict rule and never the permissive one. Regular expressions run with a 20 ms limit, so a pattern that never finishes cannot freeze the gateway. A reply whose tool calls cannot be read at all is refused with 502 rather than passed on as if it had none. See [ADR 0008](decisions/0008-fail-closed-policy.md).
+
+**Replies are masked too, streamed or not.** A streamed reply is held back by a word or a number, so a secret split between two pieces is still caught ([ADR 0009](decisions/0009-mask-streamed-replies.md)). A reply is masked before anything is decided about it, so one held for approval is stored and released masked. Tool arguments are not masked. A streamed request that declares neither `tools` nor `functions` is passed straight through, and its tool calls are not judged.
 
 When a call needs approval the agent gets `202` and a `poll_url`:
 

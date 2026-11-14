@@ -31,6 +31,6 @@ response, and a human may take minutes. Holding the connection open for that lon
 - **Hold the connection until a human decides.** Simple for agents, but connections time out
   and proxies cut them, and it ties up server resources.
 - **Webhooks to the agent on decision.** Needs the agent to run a server. Polling works from
-  anywhere. A webhook option can be added later.
+  anywhere. Reviewers, unlike agents, are told by a webhook, see [0013](0013-approval-webhook.md).
 - **Return a normal completion with a "pending" message.** Agents would treat it as the
   model's answer. A distinct object type avoids that.
