@@ -17,8 +17,7 @@ describe("a reply is masked on every way out", () => {
   });
   after(() => h.close());
 
-  const poll = (id: string) =>
-    fetch(`${h.base}/v1/approvals/${id}`, { headers: { authorization: `Bearer ${key}` } });
+  const poll = (id: string) => fetch(`${h.base}/v1/approvals/${id}`, { headers: { authorization: `Bearer ${key}` } });
 
   it("masks a reply that was held for approval, both in storage and when it is released", async () => {
     const held = await h.chat(key, '[[tool:refund {"amount":500}]][[leak]]');
