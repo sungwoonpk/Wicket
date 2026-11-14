@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createGatewayApp } from "./server.js";
 import { parsePriceTable } from "./pricing.js";
+import { validateWebhookUrl } from "./webhook.js";
 
 const MIN_TOKEN_LENGTH = 16;
 
@@ -34,6 +35,18 @@ if (process.env.WICKET_PRICES_FILE) {
   }
 }
 
+let approvalWebhook;
+if (process.env.WICKET_APPROVAL_WEBHOOK_URL) {
+  try {
+    approvalWebhook = {
+      url: validateWebhookUrl(process.env.WICKET_APPROVAL_WEBHOOK_URL),
+      secret: process.env.WICKET_WEBHOOK_SECRET,
+    };
+  } catch (err) {
+    fail(`cannot use WICKET_APPROVAL_WEBHOOK_URL: ${(err as Error).message}`);
+  }
+}
+
 const quiet = process.env.WICKET_LOG === "off";
 const logger = quiet
   ? undefined
@@ -47,10 +60,17 @@ const app = createGatewayApp({
   auditKey: process.env.WICKET_AUDIT_KEY,
   upstreamTimeoutMs: timeout,
   logger,
+  approvalWebhook,
 });
 if (!process.env.WICKET_AUDIT_KEY) {
   console.warn(
     "wicket: WICKET_AUDIT_KEY is not set, so the audit head is signed with a key derived from the admin token. Set a separate key in production.",
+  );
+}
+
+if (approvalWebhook && !approvalWebhook.secret) {
+  console.warn(
+    "wicket: WICKET_WEBHOOK_SECRET is not set, so approval messages are not signed and the receiver cannot tell where they came from.",
   );
 }
 

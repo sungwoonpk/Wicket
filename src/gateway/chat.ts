@@ -455,6 +455,14 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
           approvalId: approval.id,
           decisions: describeDecisions(decisions.filter((d) => d.action === "require_approval")),
         });
+        // Names and reasons only. The arguments can hold anything, so they stay in the queue for the reviewer.
+        svc.webhook?.notify("approval.requested", {
+          approvalId: approval.id,
+          agentId: agent.id,
+          agentName: agent.name,
+          team: agent.team,
+          toolCalls: approval.toolCalls.map((c) => ({ name: c.name, reason: c.reason })),
+        });
         sendJson(res, 202, {
           object: "wicket.approval_required",
           approval_id: approval.id,

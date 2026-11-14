@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
+import { createMockUpstream } from "../src/mock/server.js";
+import { signWebhook } from "../src/gateway/webhook.js";
 
 const MAIN = "src/gateway/main.ts";
 const STRONG = "0123456789abcdef0123456789";
@@ -67,6 +70,14 @@ describe("start-up checks", () => {
       (await launch({ WICKET_ADMIN_TOKEN: STRONG, WICKET_UPSTREAM_TIMEOUT_MS: "soon" }).done).stderr,
       /TIMEOUT_MS/,
     );
+  });
+
+  it("refuses an approval webhook address that is not allowed", async () => {
+    for (const url of ["ftp://hooks.example.com", "http://169.254.169.254/latest", "not a url"]) {
+      const r = await launch({ WICKET_ADMIN_TOKEN: STRONG, WICKET_APPROVAL_WEBHOOK_URL: url }).done;
+      assert.equal(r.code, 1, url);
+      assert.match(r.stderr, /WICKET_APPROVAL_WEBHOOK_URL/);
+    }
   });
 
   it("refuses a price file that could price requests at zero", async () => {
@@ -136,6 +147,84 @@ describe("running process", () => {
       assert.match(output(), /WICKET_AUDIT_KEY is not set/);
     } finally {
       child.kill("SIGKILL");
+    }
+  });
+
+  it("sends a signed message to the approval webhook from the environment, and warns when it is unsigned", async () => {
+    const mock = createMockUpstream();
+    await new Promise<void>((resolve) => mock.listen(0, "127.0.0.1", () => resolve()));
+    const upstream = `http://127.0.0.1:${(mock.address() as { port: number }).port}`;
+    const hits: { headers: Record<string, unknown>; body: string }[] = [];
+    const hook = createHttpServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        hits.push({ headers: req.headers, body: Buffer.concat(chunks).toString("utf8") });
+        res.end("ok");
+      });
+    });
+    await new Promise<void>((resolve) => hook.listen(0, "127.0.0.1", () => resolve()));
+    const hookUrl = `http://127.0.0.1:${(hook.address() as { port: number }).port}/approvals`;
+
+    const trigger = async (port: number) => {
+      const base = `http://127.0.0.1:${port}`;
+      const admin = { authorization: `Bearer ${STRONG}`, "content-type": "application/json" };
+      await fetch(`${base}/admin/policy`, {
+        method: "PUT",
+        headers: admin,
+        body: JSON.stringify({ tools: [{ tool: "refund", action: "require_approval" }] }),
+      });
+      const { key } = (await (
+        await fetch(`${base}/admin/agents`, { method: "POST", headers: admin, body: JSON.stringify({ name: "w" }) })
+      ).json()) as { key: string };
+      return fetch(`${base}/v1/chat/completions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "demo-small",
+          messages: [{ role: "user", content: '[[tool:refund {"amount":9}]]' }],
+        }),
+      });
+    };
+
+    const unsigned = await freePort();
+    const first = launch({
+      WICKET_ADMIN_TOKEN: STRONG,
+      PORT: String(unsigned),
+      WICKET_UPSTREAM_URL: upstream,
+      WICKET_APPROVAL_WEBHOOK_URL: hookUrl,
+    });
+    const signedPort = await freePort();
+    const second = launch({
+      WICKET_ADMIN_TOKEN: STRONG,
+      PORT: String(signedPort),
+      WICKET_UPSTREAM_URL: upstream,
+      WICKET_APPROVAL_WEBHOOK_URL: hookUrl,
+      WICKET_WEBHOOK_SECRET: "process-test-secret",
+      WICKET_AUDIT_KEY: "separate-signing-key-0123456789",
+    });
+    try {
+      await waitUntil(() => first.output().includes("listening") && second.output().includes("listening"));
+      assert.match(first.output(), /WICKET_WEBHOOK_SECRET is not set/);
+      assert.ok(!second.output().includes("WICKET_WEBHOOK_SECRET is not set"));
+
+      assert.equal((await trigger(signedPort)).status, 202);
+      await waitUntil(() => hits.length === 1);
+      const got = hits[0]!;
+      const stamp = String(got.headers["x-wicket-timestamp"]);
+      assert.equal(got.headers["x-wicket-signature"], `sha256=${signWebhook("process-test-secret", stamp, got.body)}`);
+      assert.equal(JSON.parse(got.body).type, "approval.requested");
+
+      assert.equal((await trigger(unsigned)).status, 202);
+      await waitUntil(() => hits.length === 2);
+      assert.equal(hits[1]!.headers["x-wicket-signature"], undefined);
+    } finally {
+      first.child.kill("SIGKILL");
+      second.child.kill("SIGKILL");
+      hook.closeAllConnections();
+      hook.close();
+      mock.closeAllConnections();
+      mock.close();
     }
   });
 

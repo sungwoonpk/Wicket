@@ -11,6 +11,7 @@ import { RateLimiter } from "./ratelimit.js";
 import { RequestStore } from "./requests.js";
 import { TeamStore } from "./teams.js";
 import { UpstreamStore } from "./upstreams.js";
+import { Webhook, type WebhookOptions } from "./webhook.js";
 
 export interface GatewayOptions {
   /** Base URL of the OpenAI-compatible upstream used when no registered upstream matches a model. */
@@ -30,6 +31,8 @@ export interface GatewayOptions {
   maxPendingApprovalsPerAgent?: number;
   /** Receives one structured record per request and per notable event. */
   logger?: (record: Record<string, unknown>) => void;
+  /** Where to send a message when a tool call is waiting for approval. Leave out to send nothing. */
+  approvalWebhook?: WebhookOptions;
 }
 
 /** Everything a request handler needs, built once at start-up. */
@@ -54,12 +57,15 @@ export interface Services {
   /** Requests currently being handled, per agent. */
   inFlight: Map<string, number>;
   log: (record: Record<string, unknown>) => void;
+  /** Tells another system about new approvals, or undefined when none is configured. */
+  webhook: Webhook | undefined;
 }
 
 export function createServices(options: GatewayOptions): Services {
   const db = openDb(options.dbPath);
   const auditKey =
     options.auditKey ?? createHmac("sha256", options.adminToken).update("wicket audit head").digest("hex");
+  const log = options.logger ?? (() => {});
   return {
     options: {
       upstreamUrl: options.upstreamUrl.replace(/\/+$/, ""),
@@ -81,6 +87,7 @@ export function createServices(options: GatewayOptions): Services {
     limiter: new RateLimiter(),
     authFailures: new RateLimiter(),
     inFlight: new Map(),
-    log: options.logger ?? (() => {}),
+    log,
+    webhook: options.approvalWebhook ? new Webhook(options.approvalWebhook, log) : undefined,
   };
 }
