@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Agent } from "./agents.js";
 import { bearer, clientIp, collect, HttpError, parseJsonObject, readBody, sendJson } from "./http.js";
 import { costUsd } from "./pricing.js";
+import { meterText, resolveUsage, StreamMeter, type Usage } from "./usage.js";
 import type { Outcome } from "./requests.js";
 import type { Services } from "./services.js";
 import type { Target } from "./upstreams.js";
@@ -14,8 +15,11 @@ import {
   UpstreamUnreachableError,
 } from "../providers/index.js";
 import { redactMessages, redactText } from "../policy/redact.js";
+import { SseSplitter } from "../policy/sse.js";
 import { decideToolCall, overallAction, toolCallsFromCompletion, toolCallsFromSse } from "../policy/tools.js";
 import type { Finding, ToolCall, ToolDecision } from "../policy/types.js";
+
+export { extractUsage } from "./usage.js";
 
 const MAX_BUFFERED_BYTES = 10_000_000;
 const MODEL_NAME = /^[\w.:/@+-]{1,200}$/;
@@ -23,27 +27,6 @@ const BUDGET_ALERTS: { percent: number; type: string }[] = [
   { percent: 80, type: "budget.warning" },
   { percent: 100, type: "budget.exhausted" },
 ];
-
-type Usage = { promptTokens?: number; completionTokens?: number };
-
-/** Reads token usage from a JSON response, or from the last usage-bearing SSE event. */
-export function extractUsage(text: string, stream: boolean): Usage {
-  try {
-    let usage: any;
-    if (stream) {
-      for (const event of text.split("\n\n").filter((e) => e.startsWith("data: {"))) {
-        const parsed = JSON.parse(event.slice(6));
-        if (parsed.usage) usage = parsed.usage;
-      }
-    } else {
-      usage = JSON.parse(text).usage;
-    }
-    if (!usage) return {};
-    return { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens };
-  } catch {
-    return {};
-  }
-}
 
 /** Authenticates an agent key. Repeated failures from one address are slowed down. */
 export function authenticateAgent(svc: Services, req: IncomingMessage): Agent {
@@ -169,7 +152,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     }
   };
 
-  const record = (outcome: Outcome, status: number, usage: Usage = {}) => {
+  const record = (outcome: Outcome, status: number, usage: Usage = {}, estimated = false) => {
     const latencyMs = Math.round(performance.now() - started);
     const cost = costUsd(svc.prices, model, usage.promptTokens, usage.completionTokens);
     svc.requests.add({
@@ -196,6 +179,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       outcome,
       latencyMs,
       costUsd: cost,
+      ...(estimated ? { usageEstimated: true } : {}),
     });
     if (cost > 0) checkBudget();
   };
@@ -247,6 +231,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
   }
 
   const policy = svc.policies.effective(agent.team);
+  const wantsUsage = body.stream_options?.include_usage === true;
   let redacted = false;
   if (policy.redaction.mode !== "off") {
     const result = redactMessages(body.messages, policy.redaction.detectors);
@@ -324,24 +309,31 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
 
     if (!buffered) {
       res.writeHead(upstream.status, { "content-type": upstream.contentType });
-      let captured = "";
+      const splitter = new SseSplitter();
+      const meter = new StreamMeter();
       const decoder = new TextDecoder();
+      const pass = (events: string[]) => {
+        for (const event of events) if (meter.observe(event, wantsUsage)) res.write(event);
+      };
+      // An error status carries no usage and is not charged. Anything else is, estimated if the upstream said nothing.
+      const settle = (outcome: Outcome) => {
+        const charged =
+          upstream.status < 400
+            ? resolveUsage(meter.usage, body, meter.chars)
+            : { usage: {} as Usage, estimated: false };
+        record(outcome, upstream.status, charged.usage, charged.estimated);
+      };
       try {
         for await (const chunk of upstream.chunks) {
-          const piece = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
-          captured += piece;
-          res.write(piece);
+          pass(splitter.push(typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true })));
         }
+        pass(splitter.flush());
         res.end();
-        record(outcomeFor(upstream.status), upstream.status, extractUsage(captured, true));
+        settle(outcomeFor(upstream.status));
       } catch (err) {
         // Headers are already sent, so the stream can only be cut short.
         res.end();
-        record(
-          (err as Error)?.name === "AbortError" ? "cancelled" : "upstream_error",
-          upstream.status,
-          extractUsage(captured, true),
-        );
+        settle((err as Error)?.name === "AbortError" ? "cancelled" : "upstream_error");
       }
       return;
     }
@@ -352,7 +344,11 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
     } catch (err) {
       return failUpstream(err);
     }
-    const usage = extractUsage(text, stream);
+    const metered = meterText(text, stream);
+    const { usage, estimated } =
+      upstream.status < 400
+        ? resolveUsage(metered.usage, body, metered.chars)
+        : { usage: metered.usage, estimated: false };
 
     let parsed: any;
     if (upstream.status === 200 && !stream) {
@@ -375,7 +371,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
       const action = overallAction(decisions);
 
       if (action === "deny") {
-        record("denied_tool", 403, usage);
+        record("denied_tool", 403, usage, estimated);
         svc.audit.append("tool.denied", agent.id, { model, decisions: describeDecisions(decisions) });
         const denied = decisions.find((d) => d.action === "deny")!;
         throw new HttpError(
@@ -389,13 +385,13 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
 
       if (action === "require_approval") {
         if (svc.approvals.pendingForAgent(agent.id) >= svc.options.maxPendingApprovalsPerAgent) {
-          record("rate_limited", 429, usage);
+          record("rate_limited", 429, usage, estimated);
           throw new HttpError(429, "this agent has too many tool calls waiting for approval", "rate_limit_error", {
             "retry-after": "30",
           });
         }
         const approval = svc.approvals.hold(agent.id, decisions, { body: text, contentType: upstream.contentType });
-        record("pending_approval", 202, usage);
+        record("pending_approval", 202, usage, estimated);
         svc.audit.append("approval.requested", agent.id, {
           approvalId: approval.id,
           decisions: describeDecisions(decisions.filter((d) => d.action === "require_approval")),
@@ -424,7 +420,7 @@ async function runChat(svc: Services, agent: Agent, req: IncomingMessage, res: S
 
     res.writeHead(upstream.status, { "content-type": upstream.contentType });
     res.end(outText);
-    record(outcome, upstream.status, usage);
+    record(outcome, upstream.status, usage, estimated);
   } finally {
     res.off("close", onClose);
   }

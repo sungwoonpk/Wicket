@@ -42,6 +42,15 @@ async function* translated(source: AsyncIterable<Uint8Array>, model: string): As
   if (tail) yield tail;
 }
 
+/**
+ * OpenAI-compatible servers report token usage in a stream only when asked. Without it a streamed request would
+ * be charged nothing, so the gateway always asks. Other `stream_options` the caller set are kept.
+ */
+export function withStreamUsage(body: Record<string, any>): Record<string, any> {
+  const own = body.stream_options !== null && typeof body.stream_options === "object" ? body.stream_options : {};
+  return { ...body, stream_options: { ...own, include_usage: true } };
+}
+
 /** Sends one chat request to the target and returns its response in OpenAI format. */
 export async function callUpstream(
   target: Target,
@@ -70,7 +79,7 @@ export async function callUpstream(
       res = await fetch(`${target.baseUrl}/v1/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
-        body: JSON.stringify(body),
+        body: JSON.stringify(stream ? withStreamUsage(body) : body),
         signal,
       });
     }
