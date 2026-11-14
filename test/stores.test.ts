@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { createHash, createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -99,6 +100,83 @@ describe("AuditLog", () => {
 
   it("verifies an empty log", () => {
     assert.deepEqual(new AuditLog(openDb(), KEY).verify(), { ok: true, checked: 0 });
+  });
+
+  describe("anchor kept outside the database", () => {
+    const digest = (parts: unknown[]) => createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+
+    /** What someone who holds the database file and the signing key can do: rewrite an event, and everything after it. */
+    function rewriteAndResign(db: ReturnType<typeof openDb>, key: string, seq: number, data: unknown) {
+      const rows = db.prepare("SELECT * FROM audit WHERE seq >= ? ORDER BY seq").all(seq) as any[];
+      let prev =
+        (db.prepare("SELECT hash FROM audit WHERE seq = ?").get(seq - 1) as { hash: string } | undefined)?.hash ??
+        "0".repeat(64);
+      for (const row of rows) {
+        const json = row.seq === seq ? JSON.stringify(data) : row.data;
+        const hash = digest([prev, row.at, row.type, row.actor, json]);
+        db.prepare("UPDATE audit SET data = ?, prev_hash = ?, hash = ? WHERE seq = ?").run(json, prev, hash, row.seq);
+        prev = hash;
+      }
+      const last = db.prepare("SELECT seq, hash FROM audit ORDER BY seq DESC LIMIT 1").get() as {
+        seq: number;
+        hash: string;
+      };
+      const mac = createHmac("sha256", key).update(`${last.seq}:${last.hash}`).digest("hex");
+      db.prepare("UPDATE audit_head SET seq = ?, hash = ?, mac = ? WHERE id = 1").run(last.seq, last.hash, mac);
+    }
+
+    it("reports the newest event, or nothing for an empty log", () => {
+      const audit = new AuditLog(openDb(), KEY);
+      assert.equal(audit.head(), undefined);
+      audit.append("a", "x");
+      const second = audit.append("b", "x");
+      assert.deepEqual(audit.head(), { seq: 2, hash: second.hash, at: second.at });
+    });
+
+    it("confirms an anchor that is still part of the log, also after the log has grown", () => {
+      const audit = new AuditLog(openDb(), KEY);
+      audit.append("a", "x");
+      audit.append("b", "x");
+      const anchor = audit.head()!;
+      assert.deepEqual(audit.verify(anchor), { ok: true, checked: 2, anchored: true });
+      audit.append("c", "x");
+      assert.deepEqual(audit.verify({ seq: anchor.seq, hash: anchor.hash }), { ok: true, checked: 3, anchored: true });
+    });
+
+    it("catches a rewrite that the chain and the signed head cannot, because they were redone too", () => {
+      const db = openDb();
+      const audit = new AuditLog(db, KEY);
+      audit.append("policy.updated", "owner:ann", { rules: 3 });
+      audit.append("request.denied", "agent_1", { tool: "delete_all" });
+      const anchor = audit.head()!;
+      audit.append("agent.created", "admin", { id: "a2" });
+
+      rewriteAndResign(db, KEY, 2, { tool: "nothing to see" });
+      assert.deepEqual(audit.verify(), { ok: true, checked: 3 }, "without an anchor the rewrite is not noticed");
+      const result = audit.verify(anchor);
+      assert.equal(result.ok, false);
+      assert.equal(result.brokenAt, 2);
+      assert.match(result.reason!, /not the one that was anchored/);
+    });
+
+    it("catches a log that has been cut back past the anchor, and a chain that is broken anyway", () => {
+      const db = openDb();
+      const audit = new AuditLog(db, KEY);
+      audit.append("a", "x");
+      audit.append("b", "x");
+      const anchor = audit.head()!;
+      audit.append("c", "x");
+      rewriteAndResign(db, KEY, 1, { cut: true });
+      db.prepare("DELETE FROM audit WHERE seq > 1").run();
+      rewriteAndResign(db, KEY, 1, { cut: true });
+      const cut = audit.verify(anchor);
+      assert.equal(cut.ok, false);
+      assert.match(cut.reason!, /shorter than the anchor/);
+
+      db.prepare("UPDATE audit SET data = '{}' WHERE seq = 1").run();
+      assert.equal(audit.verify(anchor).ok, false, "a broken chain fails first");
+      assert.equal(audit.verify(anchor).anchored, undefined);
+    });
   });
 });
 

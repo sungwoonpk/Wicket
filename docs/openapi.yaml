@@ -363,11 +363,36 @@ paths:
       responses:
         "200": { description: "Events, newest first." }
         "403": { $ref: "#/components/responses/Error" }
+  /admin/audit/head:
+    get:
+      tags: [Admin]
+      summary: The newest audit event, to keep somewhere the gateway cannot write. Needs access to all teams.
+      description: Store the result outside the gateway's reach, on a schedule. Later, pass it back to `/admin/audit/verify` to show that nothing up to that event was rewritten, even by someone who holds both the database and the signing key.
+      x-min-role: viewer
+      responses:
+        "200":
+          description: The newest event, or null for an empty log.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  head:
+                    type: object
+                    nullable: true
+                    properties:
+                      seq: { type: integer }
+                      hash: { type: string }
+                      at: { type: string, format: date-time }
   /admin/audit/verify:
     get:
       tags: [Admin]
-      summary: Check the hash chain and the signed head. Needs access to all teams.
+      summary: Check the hash chain and the signed head, and optionally an anchor. Needs access to all teams.
+      description: With `seq` and `hash` from an earlier `/admin/audit/head`, also checks that the log still contains that event. Pass both or neither.
       x-min-role: viewer
+      parameters:
+        - { name: seq, in: query, required: false, schema: { type: integer, minimum: 1 } }
+        - { name: hash, in: query, required: false, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
       responses:
         "200":
           {
@@ -536,3 +561,4 @@ components:
         checked: { type: integer }
         brokenAt: { type: integer }
         reason: { type: string }
+        anchored: { type: boolean, description: "True when an anchor was given and the log still contains it." }

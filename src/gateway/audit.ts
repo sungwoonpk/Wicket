@@ -17,6 +17,15 @@ export interface VerifyResult {
   /** Sequence number of the first event that does not verify. */
   brokenAt?: number;
   reason?: string;
+  /** True when a given anchor was checked and the log still contains it. */
+  anchored?: boolean;
+}
+
+/** The newest event, as far as someone needs to remember it elsewhere: its number, its hash and when it was written. */
+export interface AuditAnchor {
+  seq: number;
+  hash: string;
+  at: string;
 }
 
 const GENESIS = "0".repeat(64);
@@ -104,7 +113,44 @@ export class AuditLog {
     return this.db.prepare("SELECT * FROM audit ORDER BY seq DESC LIMIT ?").all(limit).map(fromRow);
   }
 
-  verify(): VerifyResult {
+  /** The newest event, or undefined for an empty log. Copy it somewhere the gateway cannot write, see `verify`. */
+  head(): AuditAnchor | undefined {
+    const row = this.db.prepare("SELECT seq, hash, at FROM audit ORDER BY seq DESC LIMIT 1").get() as
+      AuditAnchor | undefined;
+    return row ? { seq: row.seq, hash: row.hash, at: row.at } : undefined;
+  }
+
+  /**
+   * Checks the chain and the signed head. Someone who holds both the database and the signing key can rewrite the
+   * log and sign it again, and nothing inside the database can show that. An anchor can: the newest event as it
+   * was some time ago, kept elsewhere. The chain commits every event to the ones before it, so if the event at that
+   * number still has that hash, nothing before it was changed.
+   */
+  verify(anchor?: { seq: number; hash: string }): VerifyResult {
+    const result = this.verifyChain();
+    if (!result.ok || !anchor) return result;
+    const last = this.head();
+    if (!last || last.seq < anchor.seq) {
+      return {
+        ok: false,
+        checked: result.checked,
+        brokenAt: last ? last.seq + 1 : 1,
+        reason: `the log is shorter than the anchor: it ends at #${last?.seq ?? 0} and the anchor is #${anchor.seq} (newest events were removed)`,
+      };
+    }
+    const row = this.db.prepare("SELECT hash FROM audit WHERE seq = ?").get(anchor.seq) as { hash: string } | undefined;
+    if (!row || row.hash !== anchor.hash) {
+      return {
+        ok: false,
+        checked: result.checked,
+        brokenAt: anchor.seq,
+        reason: `event #${anchor.seq} is not the one that was anchored (the log was rewritten)`,
+      };
+    }
+    return { ...result, anchored: true };
+  }
+
+  private verifyChain(): VerifyResult {
     let prev = GENESIS;
     let checked = 0;
     let lastSeq = 0;

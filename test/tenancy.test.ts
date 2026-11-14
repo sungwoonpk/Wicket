@@ -151,7 +151,35 @@ describe("roles and team scope", () => {
   it("keeps the audit trail away from team-scoped users", async () => {
     assert.equal((await h.admin("/admin/audit", "GET", undefined, supportViewer)).status, 403);
     assert.equal((await h.admin("/admin/audit/verify", "GET", undefined, supportAdmin)).status, 403);
+    assert.equal((await h.admin("/admin/audit/head", "GET", undefined, supportViewer)).status, 403);
     assert.equal((await h.admin("/admin/audit", "GET", undefined, viewer)).status, 200);
+    assert.equal((await h.admin("/admin/audit/head", "GET", undefined, viewer)).status, 200);
+  });
+
+  it("checks an anchor kept outside the gateway", async () => {
+    const { head } = (await h.admin("/admin/audit/head")).json;
+    assert.ok(head.seq > 0 && /^[0-9a-f]{64}$/.test(head.hash));
+    await h.admin("/admin/teams", "POST", { id: "after-anchor" });
+    const ok = (await h.admin(`/admin/audit/verify?seq=${head.seq}&hash=${head.hash}`)).json;
+    assert.equal(ok.ok, true);
+    assert.equal(ok.anchored, true);
+    assert.equal((await h.admin("/admin/audit/verify")).json.anchored, undefined, "no anchor, no claim");
+
+    const wrong = (await h.admin(`/admin/audit/verify?seq=${head.seq}&hash=${"0".repeat(64)}`)).json;
+    assert.equal(wrong.ok, false);
+    assert.match(wrong.reason, /not the one that was anchored/);
+    const ahead = (await h.admin(`/admin/audit/verify?seq=${head.seq + 1000}&hash=${head.hash}`)).json;
+    assert.match(ahead.reason, /shorter than the anchor/);
+
+    for (const query of [
+      "seq=3",
+      `hash=${head.hash}`,
+      "seq=0&hash=" + head.hash,
+      "seq=x&hash=" + head.hash,
+      "seq=1&hash=abc",
+    ]) {
+      assert.equal((await h.admin(`/admin/audit/verify?${query}`)).status, 400, query);
+    }
   });
 
   it("keeps approvals inside their team", async () => {

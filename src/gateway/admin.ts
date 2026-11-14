@@ -522,11 +522,29 @@ const routes: Route[] = [
   },
   {
     method: "GET",
+    pattern: /^\/admin\/audit\/head$/,
+    role: "viewer",
+    handler: (c) => {
+      requireAllTeams(c.actor);
+      json(c, 200, { head: c.svc.audit.head() ?? null });
+    },
+  },
+  {
+    method: "GET",
     pattern: /^\/admin\/audit\/verify$/,
     role: "viewer",
     handler: (c) => {
       requireAllTeams(c.actor);
-      json(c, 200, c.svc.audit.verify());
+      const seq = c.url.searchParams.get("seq");
+      const hash = c.url.searchParams.get("hash");
+      if (seq === null && hash === null) {
+        json(c, 200, c.svc.audit.verify());
+        return;
+      }
+      if (seq === null || hash === null) throw new HttpError(400, "pass both seq and hash, or neither");
+      if (!/^[1-9]\d{0,15}$/.test(seq) || !/^[0-9a-f]{64}$/.test(hash))
+        throw new HttpError(400, "seq must be a whole number from 1 and hash 64 lowercase hex characters");
+      json(c, 200, c.svc.audit.verify({ seq: Number(seq), hash }));
     },
   },
 
